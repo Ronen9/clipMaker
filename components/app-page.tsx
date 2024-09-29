@@ -39,8 +39,8 @@ export function Page() {
     return new Promise((resolve) => {
       const video = document.createElement('video')
       video.preload = 'metadata'
-      video.onloadedmetadata = () => {
-        video.currentTime = 1
+      video.onloadeddata = () => {
+        video.currentTime = 1 // Set to 1 second or another appropriate time
       }
       video.onseeked = () => {
         const canvas = document.createElement('canvas')
@@ -74,30 +74,29 @@ export function Page() {
       } else if (file.type.startsWith('video/')) {
         type = 'video'
         preview = await createVideoThumbnail(file)
-        if (videoRef.current) {
-          videoRef.current.src = URL.createObjectURL(file)
-          await new Promise((resolve) => {
-            if (videoRef.current) {
-              videoRef.current.onloadedmetadata = () => resolve(null)
-            }
-          })
-          aspectRatio = (videoRef.current?.videoWidth || 1) / (videoRef.current?.videoHeight || 1)
-        } else {
-          aspectRatio = 16 / 9 // Default aspect ratio if video element is not available
-        }
+        const video = document.createElement('video')
+        video.src = URL.createObjectURL(file)
+        await new Promise((resolve) => {
+          video.onloadedmetadata = () => {
+            aspectRatio = video.videoWidth / video.videoHeight
+            resolve(null)
+          }
+        })
       } else {
         throw new Error('Unsupported file type')
       }
 
-      const newMediaItems = [...mediaItems]
-      newMediaItems[index] = {
-        file,
-        duration: 4,
-        preview,
-        aspectRatio,
-        type
-      }
-      setMediaItems(newMediaItems)
+      setMediaItems(prevItems => {
+        const newMediaItems = [...prevItems]
+        newMediaItems[index] = {
+          file,
+          duration: 4,
+          preview,
+          aspectRatio,
+          type
+        }
+        return newMediaItems
+      })
     } catch (error) {
       console.error('Error processing file:', error)
       toast.error('Error processing file. Please try again.')
@@ -119,7 +118,17 @@ export function Page() {
     toast.success('Clip creation started! This may take a few moments.')
   }
 
+  const checkMediaDevicesSupport = () => {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      toast.error('Your browser does not support media devices. Please try a different browser.')
+      return false
+    }
+    return true
+  }
+
   const startCapture = useCallback(async (index: number, mode: CaptureMode) => {
+    if (!checkMediaDevicesSupport()) return
+
     console.log('Starting capture:', mode)
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ 
@@ -134,7 +143,23 @@ export function Page() {
       setIsCameraReady(false) // Reset camera ready state
     } catch (error) {
       console.error('Error accessing camera:', error)
-      toast.error('Unable to access camera. Please check your permissions.')
+      let errorMessage = 'Unable to access camera. Please check your permissions.'
+      if (error instanceof DOMException) {
+        switch (error.name) {
+          case 'NotFoundError':
+            errorMessage = 'No camera detected. Please ensure your camera is properly connected and not in use by another application.'
+            break
+          case 'NotAllowedError':
+            errorMessage = 'Camera access was denied. Please grant camera permissions and try again.'
+            break
+          case 'NotReadableError':
+            errorMessage = 'Camera is in use by another application or encountered a hardware error. Please close other apps using the camera and try again.'
+            break
+          default:
+            errorMessage = `Camera error: ${error.message}`
+        }
+      }
+      toast.error(errorMessage)
     }
   }, [])
 
@@ -211,21 +236,69 @@ export function Page() {
   }, [isRecording])
 
   const confirmCapture = useCallback(async () => {
-    console.log('Confirming capture')
     if (capturedMedia && currentIndex !== null) {
       try {
-        const file = new File([capturedMedia], `captured_${captureMode}.${captureMode === 'image' ? 'jpg' : 'webm'}`, { type: captureMode === 'image' ? 'image/jpeg' : 'video/webm' })
-        await processFile(file, currentIndex)
+        let preview: string
+        let aspectRatio: number
+
+        if (captureMode === 'video') {
+          preview = await createThumbnailFromVideo(new Blob([capturedMedia], { type: 'video/mp4' }))
+          const video = document.createElement('video')
+          video.src = URL.createObjectURL(capturedMedia)
+          await new Promise<void>((resolve) => {
+            video.onloadedmetadata = () => {
+              aspectRatio = video.videoWidth / video.videoHeight
+              resolve()
+            }
+          })
+        } else {
+          preview = capturedMediaURL || ''
+          aspectRatio = captureVideoRef.current ? captureVideoRef.current.videoWidth / captureVideoRef.current.videoHeight : 16 / 9
+        }
+
+        const file = new File([capturedMedia], `captured_${captureMode}.${captureMode === 'image' ? 'jpg' : 'mp4'}`, {
+          type: captureMode === 'image' ? 'image/jpeg' : 'video/mp4'
+        })
+
+        setMediaItems(prevItems => {
+          const newMediaItems = [...prevItems]
+          newMediaItems[currentIndex] = {
+            file,
+            duration: 4,
+            preview,
+            aspectRatio,
+            type: captureMode === 'image' ? 'image' : 'video'
+          }
+          return newMediaItems
+        })
+
         stopCapture()
       } catch (error) {
         console.error('Error confirming capture:', error)
-        toast.error('Error saving captured media. Please try again.')
+        toast.error('Error confirming capture. Please try again.')
       }
-    } else {
-      console.error('No captured media or current index')
-      toast.error('Error saving captured media. Please try again.')
     }
-  }, [capturedMedia, currentIndex, captureMode, processFile, stopCapture])
+  }, [capturedMedia, currentIndex, captureMode, capturedMediaURL, stopCapture])
+
+  const resetCaptureState = useCallback(() => {
+    setCapturedMedia(null)
+    setCapturedMediaURL(null)
+    setIsCameraReady(false)
+  }, [])
+
+  const playVideoInThumbnail = (index: number) => {
+    const videoElement = document.createElement('video')
+    videoElement.src = URL.createObjectURL(mediaItems[index].file)
+    videoElement.className = 'max-w-full max-h-full object-contain'
+    videoElement.controls = true
+    videoElement.autoplay = true
+
+    const thumbnailContainer = document.getElementById(`thumbnail-${index}`)
+    if (thumbnailContainer) {
+      thumbnailContainer.innerHTML = ''
+      thumbnailContainer.appendChild(videoElement)
+    }
+  }
 
   useEffect(() => {
     return () => {
@@ -248,7 +321,27 @@ export function Page() {
           })
       }
     }
-  }, [isCapturing])
+  }, [isCapturing, capturedMediaURL])
+
+  const createThumbnailFromVideo = (file: File): Promise<string> => {
+    return new Promise((resolve) => {
+      const video = document.createElement('video')
+      video.preload = 'metadata'
+      video.onloadedmetadata = () => {
+        const duration = video.duration
+        const seekTime = isFinite(duration) && duration > 0 ? duration / 2 : 1
+        video.currentTime = seekTime
+      }
+      video.onseeked = () => {
+        const canvas = document.createElement('canvas')
+        canvas.width = video.videoWidth
+        canvas.height = video.videoHeight
+        canvas.getContext('2d')?.drawImage(video, 0, 0, canvas.width, canvas.height)
+        resolve(canvas.toDataURL('image/jpeg'))
+      }
+      video.src = URL.createObjectURL(file)
+    })
+  }
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-purple-100 to-indigo-100 p-4 md:p-6 lg:p-8">
@@ -297,7 +390,7 @@ export function Page() {
                         onChange={(e) => handleFileChange(e, index)}
                       />
                       {mediaItems[index] ? (
-                        <div className="relative w-full h-40 flex items-center justify-center border-2 border-indigo-300 rounded-md overflow-hidden">
+                        <div id={`thumbnail-${index}`} className="relative w-full h-40 flex items-center justify-center border-2 border-indigo-300 rounded-md overflow-hidden">
                           <img
                             src={mediaItems[index].preview}
                             alt={`Preview of media ${index + 1}`}
@@ -311,7 +404,10 @@ export function Page() {
                             )}
                           </div>
                           {mediaItems[index].type === 'video' && (
-                            <div className="absolute inset-0 flex items-center justify-center">
+                            <div 
+                              className="absolute inset-0 flex items-center justify-center cursor-pointer"
+                              onClick={() => playVideoInThumbnail(index)}
+                            >
                               <div className="bg-black bg-opacity-50 rounded-full p-2">
                                 <Play className="w-8 h-8 text-white" />
                               </div>
@@ -445,7 +541,7 @@ export function Page() {
                 </>
               ) : (
                 <>
-                  <Button onClick={() => { setCapturedMedia(null); setCapturedMediaURL(null); }} className="bg-yellow-500 hover:bg-yellow-600 text-white">
+                  <Button onClick={() => { resetCaptureState() }} className="bg-yellow-500 hover:bg-yellow-600 text-white">
                     <RotateCcw className="w-4 h-4 mr-2" />
                     Retake
                   </Button>
