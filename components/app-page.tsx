@@ -242,9 +242,10 @@ export function Page() {
         let aspectRatio: number
 
         if (captureMode === 'video') {
-          preview = await createThumbnailFromVideo(new Blob([capturedMedia], { type: 'video/mp4' }))
+          const videoFile = new File([capturedMedia], 'video.mp4', { type: 'video/mp4' })
+          preview = await createThumbnailFromVideo(videoFile)
           const video = document.createElement('video')
-          video.src = URL.createObjectURL(capturedMedia)
+          video.src = URL.createObjectURL(videoFile)
           await new Promise<void>((resolve) => {
             video.onloadedmetadata = () => {
               aspectRatio = video.videoWidth / video.videoHeight
