@@ -6,8 +6,9 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Slider } from "@/components/ui/slider"
 import { toast, Toaster } from 'react-hot-toast'
-import { Upload, Camera, X, Film, Image as ImageIcon, Check, RotateCcw, Play } from 'lucide-react'
+import { Upload, Camera, X, Film, Image as ImageIcon, Check, RotateCcw, Play, Send } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
+import { Textarea } from "@/components/ui/textarea"
 
 type MediaItem = {
   file: File
@@ -28,6 +29,8 @@ export function Page() {
   const [capturedMedia, setCapturedMedia] = useState<Blob | null>(null)
   const [capturedMediaURL, setCapturedMediaURL] = useState<string | null>(null)
   const [isCameraReady, setIsCameraReady] = useState(false)
+  const [textAreaValues, setTextAreaValues] = useState<string[]>(Array(5).fill(''))
+  const [textAreaFocused, setTextAreaFocused] = useState<boolean[]>(Array(5).fill(false))
 
   const videoRef = useRef<HTMLVideoElement>(null)
   const captureVideoRef = useRef<HTMLVideoElement>(null)
@@ -115,7 +118,20 @@ export function Page() {
   }, [mediaItems])
 
   const handleSubmit = async () => {
-    toast.success('Clip creation started! This may take a few moments.')
+    toast.success('הקליפ נשלח בהצלחה! זה עשוי לקחת מספר רגעים.')
+    
+    // Wait for a short delay to allow the success message to be seen
+    setTimeout(() => {
+      // Reset all state variables
+      setMediaItems([])
+      setTextAreaValues(Array(5).fill(''))
+      setTextAreaFocused(Array(5).fill(false))
+      
+      // If you have any other state variables that need resetting, do it here
+      
+      // Show a message that the UI has been reset
+      toast('המערכת מוכנה ליצירת קליפ חדש', { type: 'info' } as any)
+    }, 2000); // 2 second delay, adjust as needed
   }
 
   const checkMediaDevicesSupport = () => {
@@ -344,6 +360,29 @@ export function Page() {
     })
   }
 
+  const handleTextAreaChange = (index: number, value: string) => {
+    const newValues = [...textAreaValues]
+    newValues[index] = value
+    setTextAreaValues(newValues)
+  }
+
+  const handleTextAreaFocus = (index: number) => {
+    const newFocused = [...textAreaFocused]
+    newFocused[index] = true
+    setTextAreaFocused(newFocused)
+  }
+
+  const handleTextAreaBlur = (index: number) => {
+    const newFocused = [...textAreaFocused]
+    newFocused[index] = false
+    setTextAreaFocused(newFocused)
+    if (!textAreaValues[index].trim()) {
+      const newValues = [...textAreaValues]
+      newValues[index] = ''
+      setTextAreaValues(newValues)
+    }
+  }
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-purple-100 to-indigo-100 p-4 md:p-6 lg:p-8">
       <Toaster position="top-center" />
@@ -366,8 +405,8 @@ export function Page() {
                   className="space-y-2"
                 >
                   <div className="flex items-center justify-between">
-                    <Label htmlFor={`media-${index}`} className="text-sm font-medium text-gray-700">
-                      Media {index + 1}
+                    <Label htmlFor={`media-${index}`} className="text-base font-bold text-indigo-700 w-full text-right mb-2 block bg-indigo-50 p-2 rounded">
+                      תמונה\וידאו {index + 1}
                     </Label>
                     {mediaItems[index] && (
                       <Button
@@ -419,7 +458,7 @@ export function Page() {
                         <div className="flex flex-col space-y-2">
                           <Label
                             htmlFor={`media-${index}`}
-                            className="flex items-center justify-center w-full h-20 px-4 transition bg-white border-2 border-indigo-300 border-dashed rounded-md appearance-none cursor-pointer hover:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2"
+                            className="flex items-center justify-center w-full h-40 px-4 transition bg-white border-2 border-indigo-300 border-dashed rounded-md appearance-none cursor-pointer hover:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2"
                           >
                             <span className="flex items-center space-x-2">
                               <Upload className="w-6 h-6 text-indigo-500" />
@@ -446,23 +485,34 @@ export function Page() {
                       )}
                     </div>
                     {mediaItems[index] && (
-                      <div className="w-24 flex flex-col items-center">
-                        <Label htmlFor={`duration-${index}`} className="text-xs font-medium text-gray-700 mb-2">
-                          Duration
+                      <div className="w-full flex flex-col items-start">
+                        <Label htmlFor={`duration-${index}`} className="text-xs font-medium text-gray-700 mb-2 w-full text-right">
+                          משך זמן התצוגה בקליפ הסופי
                         </Label>
-                        <Slider
-                          id={`duration-${index}`}
-                          value={[mediaItems[index].duration]}
-                          onValueChange={(value) => handleDurationChange(value, index)}
-                          max={10}
-                          min={1}
-                          step={0.1}
-                          className="[&>span]:bg-indigo-500"
-                          aria-label={`Set duration for media ${index + 1}`}
-                        />
-                        <p className="text-xs text-center mt-2 text-gray-600">
+                        <div className="w-full" style={{ direction: 'rtl' }}>
+                          <Slider
+                            id={`duration-${index}`}
+                            value={[11 - mediaItems[index].duration]}
+                            onValueChange={(value) => handleDurationChange([11 - value[0]], index)}
+                            max={10}
+                            min={1}
+                            step={0.1}
+                            className="w-full [&>span]:bg-indigo-500"
+                            aria-label={`Set duration for media ${index + 1}`}
+                          />
+                        </div>
+                        <p className="text-xs text-right mt-2 text-gray-600 w-full">
                           {mediaItems[index].duration.toFixed(1)}s
                         </p>
+                        <Textarea
+                          placeholder={textAreaFocused[index] ? '' : 'מה מצולם?'}
+                          value={textAreaValues[index]}
+                          onChange={(e) => handleTextAreaChange(index, e.target.value)}
+                          onFocus={() => handleTextAreaFocus(index)}
+                          onBlur={() => handleTextAreaBlur(index)}
+                          className="mt-2 w-full text-right placeholder-right"
+                          style={{ direction: 'rtl' }}
+                        />
                       </div>
                     )}
                   </div>
@@ -471,11 +521,12 @@ export function Page() {
             ))}
           </div>
           <Button
-            className="w-full mt-6 bg-indigo-600 hover:bg-indigo-700 text-white transition-colors"
+            className="w-full mt-6 bg-indigo-600 hover:bg-indigo-700 text-white transition-colors text-right font-bold text-lg py-3 rounded-lg shadow-md flex items-center justify-center"
             onClick={handleSubmit}
             disabled={mediaItems.length === 0}
           >
-            Create Clip
+            <Send className="w-5 h-5 ml-2" />
+            שגר\י ליצירת הקליפ
           </Button>
         </div>
       </motion.div>
