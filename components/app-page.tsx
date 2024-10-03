@@ -9,6 +9,7 @@ import { toast, Toaster } from 'react-hot-toast'
 import { Upload, Camera, X, Film, Image as ImageIcon, Check, RotateCcw, Play, Send } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Textarea } from "@/components/ui/textarea"
+import { cn } from "@/lib/utils"
 
 type MediaItem = {
   file: File
@@ -390,11 +391,11 @@ export function Page() {
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.5 }}
-        className="max-w-md mx-auto bg-white rounded-xl shadow-lg overflow-hidden md:max-w-2xl"
+        className="max-w-md mx-auto bg-white rounded-xl shadow-lg overflow-hidden md:max-w-2xl lg:max-w-4xl"
       >
-        <div className="p-8">
-          <h1 className="text-3xl font-bold text-center mb-6 text-indigo-600">Media Clip Maker</h1>
-          <div className="space-y-6">
+        <div className="p-4 md:p-6 lg:p-8">
+          <h1 className="text-3xl font-bold text-center mb-8 text-indigo-600">Media Clip Maker</h1>
+          <div className="space-y-8">
             {[...Array(5)].map((_, index) => (
               <AnimatePresence key={index}>
                 <motion.div
@@ -402,10 +403,10 @@ export function Page() {
                   animate={{ opacity: 1, height: 'auto' }}
                   exit={{ opacity: 0, height: 0 }}
                   transition={{ duration: 0.3 }}
-                  className="space-y-2"
+                  className="space-y-4"
                 >
                   <div className="flex items-center justify-between">
-                    <Label htmlFor={`media-${index}`} className="text-base font-bold text-indigo-700 w-full text-right mb-2 block bg-indigo-50 p-2 rounded">
+                    <Label htmlFor={`media-${index}`} className="text-lg font-bold text-indigo-700 w-full text-right mb-2 block bg-indigo-50 p-3 rounded-lg">
                       תמונה\וידאו {index + 1}
                     </Label>
                     {mediaItems[index] && (
@@ -413,15 +414,18 @@ export function Page() {
                         variant="ghost"
                         size="icon"
                         onClick={() => handleRemoveItem(index)}
-                        className="h-8 w-8 text-red-500 hover:text-red-700 hover:bg-red-100 transition-colors"
+                        className="h-10 w-10 text-red-500 hover:text-red-700 hover:bg-red-100 transition-colors"
                       >
-                        <X className="h-4 w-4" />
+                        <X className="h-5 w-5" />
                         <span className="sr-only">Remove media</span>
                       </Button>
                     )}
                   </div>
-                  <div className="flex items-start space-x-4">
-                    <div className="relative flex-grow">
+                  <div className="flex flex-col md:flex-row items-start space-y-4 md:space-y-0 md:space-x-4">
+                    <div className={cn(
+                      "relative flex-grow w-full md:w-1/2",
+                      mediaItems[index] && "md:w-2/3 lg:w-1/2"
+                    )}>
                       <Input
                         id={`media-${index}`}
                         type="file"
@@ -430,17 +434,17 @@ export function Page() {
                         onChange={(e) => handleFileChange(e, index)}
                       />
                       {mediaItems[index] ? (
-                        <div id={`thumbnail-${index}`} className="relative w-full h-40 flex items-center justify-center border-2 border-indigo-300 rounded-md overflow-hidden">
+                        <div id={`thumbnail-${index}`} className="relative w-full h-60 md:h-80 flex items-center justify-center border-2 border-indigo-300 rounded-lg overflow-hidden">
                           <img
                             src={mediaItems[index].preview}
                             alt={`Preview of media ${index + 1}`}
                             className="max-w-full max-h-full object-contain"
                           />
-                          <div className="absolute top-2 right-2 bg-white rounded-full p-1">
+                          <div className="absolute top-2 right-2 bg-white rounded-full p-2">
                             {mediaItems[index].type === 'image' ? (
-                              <ImageIcon className="w-4 h-4 text-indigo-500" />
+                              <ImageIcon className="w-5 h-5 text-indigo-500" />
                             ) : (
-                              <Film className="w-4 h-4 text-indigo-500" />
+                              <Film className="w-5 h-5 text-indigo-500" />
                             )}
                           </div>
                           {mediaItems[index].type === 'video' && (
@@ -448,36 +452,36 @@ export function Page() {
                               className="absolute inset-0 flex items-center justify-center cursor-pointer"
                               onClick={() => playVideoInThumbnail(index)}
                             >
-                              <div className="bg-black bg-opacity-50 rounded-full p-2">
-                                <Play className="w-8 h-8 text-white" />
+                              <div className="bg-black bg-opacity-50 rounded-full p-3">
+                                <Play className="w-10 h-10 text-white" />
                               </div>
                             </div>
                           )}
                         </div>
                       ) : (
-                        <div className="flex flex-col space-y-2">
+                        <div className="flex flex-col space-y-3">
                           <Label
                             htmlFor={`media-${index}`}
-                            className="flex items-center justify-center w-full h-40 px-4 transition bg-white border-2 border-indigo-300 border-dashed rounded-md appearance-none cursor-pointer hover:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2"
+                            className="flex items-center justify-center w-full h-60 md:h-80 px-4 transition bg-white border-2 border-indigo-300 border-dashed rounded-lg appearance-none cursor-pointer hover:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2"
                           >
                             <span className="flex items-center space-x-2">
-                              <Upload className="w-6 h-6 text-indigo-500" />
-                              <span className="font-medium text-indigo-500">Upload</span>
+                              <Upload className="w-8 h-8 text-indigo-500" />
+                              <span className="font-medium text-indigo-500 text-lg">Upload</span>
                             </span>
                           </Label>
                           <div className="flex space-x-2">
                             <Button
                               onClick={() => startCapture(index, 'image')}
-                              className="flex-1 bg-indigo-100 text-indigo-600 hover:bg-indigo-200"
+                              className="flex-1 bg-indigo-100 text-indigo-600 hover:bg-indigo-200 py-3"
                             >
-                              <Camera className="w-4 h-4 mr-2" />
+                              <Camera className="w-5 h-5 mr-2" />
                               Capture Image
                             </Button>
                             <Button
                               onClick={() => startCapture(index, 'video')}
-                              className="flex-1 bg-indigo-100 text-indigo-600 hover:bg-indigo-200"
+                              className="flex-1 bg-indigo-100 text-indigo-600 hover:bg-indigo-200 py-3"
                             >
-                              <Film className="w-4 h-4 mr-2" />
+                              <Film className="w-5 h-5 mr-2" />
                               Record Video
                             </Button>
                           </div>
@@ -485,8 +489,8 @@ export function Page() {
                       )}
                     </div>
                     {mediaItems[index] && (
-                      <div className="w-full flex flex-col items-start">
-                        <Label htmlFor={`duration-${index}`} className="text-xs font-medium text-gray-700 mb-2 w-full text-right">
+                      <div className="w-full md:w-1/2 lg:w-1/3 flex flex-col items-start">
+                        <Label htmlFor={`duration-${index}`} className="text-sm font-medium text-gray-700 mb-2 w-full text-right">
                           משך זמן התצוגה בקליפ הסופי
                         </Label>
                         <div className="w-full" style={{ direction: 'rtl' }}>
@@ -501,7 +505,7 @@ export function Page() {
                             aria-label={`Set duration for media ${index + 1}`}
                           />
                         </div>
-                        <p className="text-xs text-right mt-2 text-gray-600 w-full">
+                        <p className="text-sm text-right mt-2 text-gray-600 w-full">
                           {mediaItems[index].duration.toFixed(1)}s
                         </p>
                         <Textarea
@@ -510,7 +514,7 @@ export function Page() {
                           onChange={(e) => handleTextAreaChange(index, e.target.value)}
                           onFocus={() => handleTextAreaFocus(index)}
                           onBlur={() => handleTextAreaBlur(index)}
-                          className="mt-2 w-full text-right placeholder-right"
+                          className="mt-4 w-full text-right placeholder-right h-24"
                           style={{ direction: 'rtl' }}
                         />
                       </div>
@@ -521,11 +525,11 @@ export function Page() {
             ))}
           </div>
           <Button
-            className="w-full mt-6 bg-indigo-600 hover:bg-indigo-700 text-white transition-colors text-right font-bold text-lg py-3 rounded-lg shadow-md flex items-center justify-center"
+            className="w-full mt-8 bg-indigo-600 hover:bg-indigo-700 text-white transition-colors text-right font-bold text-lg py-4 rounded-lg shadow-md flex items-center justify-center"
             onClick={handleSubmit}
             disabled={mediaItems.length === 0}
           >
-            <Send className="w-5 h-5 ml-2" />
+            <Send className="w-6 h-6 ml-2" />
             שגר\י ליצירת הקליפ
           </Button>
         </div>
