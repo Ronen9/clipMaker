@@ -44,12 +44,15 @@ const clipQueue = new Queue('clipCreation', { connection: redisClient });
 // Placeholder for webhook URL
 const WEBHOOK_URL = process.env.WEBHOOK_URL || 'https://hook.eu1.make.com/your_webhook_endpoint';
 
-export async function POST(request: NextRequest) {
+export async function POST(req: NextRequest) {
+  console.log('Received POST request to /api/create-clip');
   const sessionId = uuidv4();
   log('info', `Starting new clip creation session`, { sessionId });
 
   try {
-    const formData = await request.formData();
+    const body = await req.json();
+    console.log('Request body:', body);
+    const formData = await req.formData();
     const files: File[] = [];
     const metadata: Record<string, any> = {};
 
@@ -105,8 +108,8 @@ async function createClip(mediaItems: any[], outputPath: string, jobId: string) 
   let command = ffmpeg();
 
   // Ensure the necessary fonts are installed on the server
-  // Example: apt-get install fonts-noto
-  const fontPath = '/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf';
+  // For Render, you might need to install fonts in the build process
+  const fontPath = '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf';
 
   try {
     for (let i = 0; i < mediaItems.length; i++) {
@@ -133,7 +136,7 @@ async function createClip(mediaItems: any[], outputPath: string, jobId: string) 
       // Add text overlay with animation
       if (item.text) {
         command = command.complexFilter([
-          `drawtext=fontfile=${fontPath}:fontsize=24:fontcolor=white@0.8:box=1:boxcolor=black@0.4:boxborderw=5:x=(w-tw)/2:y=h-th-20:text='${item.text}':enable='between(t,0,${item.duration-0.5})':alpha='if(lt(t,${item.duration-0.5}))*2)'`
+          `drawtext=fontfile=${fontPath}:fontsize=24:fontcolor=white@0.8:box=1:boxcolor=black@0.4:boxborderw=5:x=(w-tw)/2:y=h-th-20:text='${item.text}':enable='between(t,0,${item.duration-0.5})':alpha='if(lt(t,${item.duration-0.5}),1,0)'`
         ]);
       }
     }
@@ -142,7 +145,9 @@ async function createClip(mediaItems: any[], outputPath: string, jobId: string) 
       .output(outputPath);
 
     return new Promise((resolve, reject) => {
-      command.on('end', () => {
+      command.on('start', (commandLine) => {
+        log('info', `FFmpeg command: ${commandLine}`, { jobId });
+      }).on('end', () => {
         log('info', `Clip creation completed`, { jobId });
         resolve(null);
       }).on('error', (err) => {
