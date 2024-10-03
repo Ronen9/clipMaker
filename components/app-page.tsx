@@ -108,10 +108,12 @@ export function Page() {
   }
 
   const handleDurationChange = useCallback((value: number[], index: number) => {
-    const newMediaItems = [...mediaItems]
-    newMediaItems[index] = { ...newMediaItems[index], duration: value[0] }
-    setMediaItems(newMediaItems)
-  }, [mediaItems])
+    setMediaItems(prevItems => prevItems.map((item, i) => 
+      i === index && item.type === 'image' 
+        ? { ...item, duration: value[0] } 
+        : item
+    ));
+  }, []);
 
   const handleRemoveItem = useCallback((index: number) => {
     const newMediaItems = mediaItems.filter((_, i) => i !== index)
@@ -490,24 +492,28 @@ export function Page() {
                     </div>
                     {mediaItems[index] && (
                       <div className="w-full md:w-1/2 lg:w-1/3 flex flex-col items-start">
-                        <Label htmlFor={`duration-${index}`} className="text-sm font-medium text-gray-700 mb-2 w-full text-right">
-                          משך זמן התצוגה בקליפ הסופי
-                        </Label>
-                        <div className="w-full" style={{ direction: 'rtl' }}>
-                          <Slider
-                            id={`duration-${index}`}
-                            value={[11 - mediaItems[index].duration]}
-                            onValueChange={(value) => handleDurationChange([11 - value[0]], index)}
-                            max={10}
-                            min={1}
-                            step={0.1}
-                            className="w-full [&>span]:bg-indigo-500"
-                            aria-label={`Set duration for media ${index + 1}`}
-                          />
-                        </div>
-                        <p className="text-sm text-right mt-2 text-gray-600 w-full">
-                          {mediaItems[index].duration.toFixed(1)}s
-                        </p>
+                        {mediaItems[index].type === 'image' && (
+                          <>
+                            <Label htmlFor={`duration-${index}`} className="text-sm font-medium text-gray-700 mb-2 w-full text-right">
+                              משך זמן התצוגה בקליפ הסופי
+                            </Label>
+                            <div className="w-full" style={{ direction: 'rtl' }}>
+                              <Slider
+                                id={`duration-${index}`}
+                                value={[11 - mediaItems[index].duration]}
+                                onValueChange={(value) => handleDurationChange([11 - value[0]], index)}
+                                max={10}
+                                min={1}
+                                step={0.1}
+                                className="w-full [&>span]:bg-indigo-500"
+                                aria-label={`Set duration for media ${index + 1}`}
+                              />
+                            </div>
+                            <p className="text-sm text-right mt-2 text-gray-600 w-full">
+                              {mediaItems[index].duration.toFixed(1)}s
+                            </p>
+                          </>
+                        )}
                         <Textarea
                           placeholder={textAreaFocused[index] ? '' : 'מה מצולם?'}
                           value={textAreaValues[index]}
