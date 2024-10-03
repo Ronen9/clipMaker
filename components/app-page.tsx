@@ -121,21 +121,45 @@ export function Page() {
   }, [mediaItems])
 
   const handleSubmit = async () => {
-    toast.success('הקליפ נשלח בהצלחה! זה עשוי לקחת מספר רגעים.')
-    
-    // Wait for a short delay to allow the success message to be seen
-    setTimeout(() => {
-      // Reset all state variables
-      setMediaItems([])
-      setTextAreaValues(Array(5).fill(''))
-      setTextAreaFocused(Array(5).fill(false))
+    try {
+      const formData = new FormData();
+      mediaItems.forEach((item, index) => {
+        formData.append(`file${index}`, item.file);
+        formData.append(`duration${index}`, item.duration.toString());
+        formData.append(`type${index}`, item.type);
+        formData.append(`text${index}`, textAreaValues[index]);
+      });
+
+      const response = await fetch('/api/create-clip', {
+        method: 'POST',
+        body: formData,
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to create clip');
+      }
+
+      const data = await response.json();
+      toast.success('הקליפ נוצר בהצלחה!');
       
-      // If you have any other state variables that need resetting, do it here
-      
-      // Show a message that the UI has been reset
-      toast('המערכת מוכנה ליצירת קליפ חדש', { type: 'info' } as any)
-    }, 2000); // 2 second delay, adjust as needed
-  }
+      // Provide a link to the created video
+      const videoLink = `<a href="${data.videoUrl}" target="_blank">צפה בקליפ</a>`;
+      toast((t) => (
+        <span>
+          הקליפ מוכן! {' '}
+          <span dangerouslySetInnerHTML={{ __html: videoLink }} />
+        </span>
+      ), { duration: 5000 });
+
+      // Reset state
+      setMediaItems([]);
+      setTextAreaValues(Array(5).fill(''));
+      setTextAreaFocused(Array(5).fill(false));
+    } catch (error) {
+      console.error('Error creating clip:', error);
+      toast.error('שגיאה ביצירת הקליפ. אנא נסה שוב.');
+    }
+  };
 
   const checkMediaDevicesSupport = () => {
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
