@@ -17,7 +17,11 @@ function log(level: 'info' | 'warn' | 'error', message: string, meta?: any) {
 
 const execAsync = promisify(exec);
 
-ffmpeg.setFfmpegPath(ffmpegStatic as string);
+// Use path.resolve to get the absolute path
+const ffmpegPath = path.resolve(process.cwd(), ffmpegStatic as string);
+ffmpeg.setFfmpegPath(ffmpegPath);
+
+console.log('FFmpeg path:', ffmpegPath); // Add this log to check the path
 
 const TEMP_DIR = path.join(process.cwd(), 'temp');
 const OUTPUT_DIR = path.join(process.cwd(), 'public', 'output');
@@ -35,7 +39,7 @@ try {
   redisClient = new Redis(process.env.REDIS_URL || 'redis://localhost:6379', redisOptions);
   log('info', 'Redis connection established');
 } catch (error) {
-  log('error', 'Failed to connect to Redis', error);
+  log('error', 'Failed to connect to Redis', error instanceof Error ? error.message : String(error));
   throw error;
 }
 
@@ -44,119 +48,154 @@ const clipQueue = new Queue('clipCreation', { connection: redisClient });
 // Placeholder for webhook URL
 const WEBHOOK_URL = process.env.WEBHOOK_URL || 'https://hook.eu1.make.com/your_webhook_endpoint';
 
+import { execSync } from 'child_process';
+
+try {
+  execSync(`"${ffmpegPath}" -version`);
+  console.log('FFmpeg is accessible');
+} catch (error) {
+  console.error('FFmpeg is not accessible:', error instanceof Error ? error.message : String(error));
+}
+
 export async function POST(req: NextRequest) {
   console.log('Received POST request to /api/create-clip');
   const sessionId = uuidv4();
   log('info', `Starting new clip creation session`, { sessionId });
 
   try {
-    const body = await req.json();
-    console.log('Request body:', body);
     const formData = await req.formData();
     const files: File[] = [];
     const metadata: Record<string, any> = {};
+    const savedFilePaths: string[] = [];
 
     for (const [key, value] of Array.from(formData.entries())) {
       if (value instanceof File) {
+        const filePath = path.join(TEMP_DIR, `${sessionId}_${value.name}`);
+        await fs.writeFile(filePath, Buffer.from(await value.arrayBuffer()));
+        savedFilePaths.push(filePath);
         files.push(value);
       } else {
         metadata[key] = value;
       }
     }
 
-    if (files.length === 0) {
-      log('warn', 'No files uploaded', { sessionId });
-      return NextResponse.json({ error: 'No files uploaded' }, { status: 400 });
+    if (savedFilePaths.length === 0) {
+      throw new Error('No files were uploaded');
     }
 
-    const sessionDir = path.join(TEMP_DIR, sessionId);
-    fs.ensureDirSync(sessionDir);
+    console.log('Saved files:', savedFilePaths);
+    console.log('Received metadata:', metadata);
 
-    const mediaItems = await Promise.all(files.map(async (file, index) => {
-      const fileName = `${index}_${file.name}`;
-      const filePath = path.join(sessionDir, fileName);
-      await fs.writeFile(filePath, Buffer.from(await file.arrayBuffer()));
-      log('info', `File saved`, { sessionId, fileName });
-      return {
+    const jobId = await clipQueue.add('createClip', {
+      mediaItems: savedFilePaths.map((filePath, index) => ({
         path: filePath,
-        type: file.type.startsWith('image/') ? 'image' : 'video',
-        duration: parseFloat(metadata[`duration${index}`] || '4'),
-        text: metadata[`text${index}`] || '',
-      };
-    }));
-
-    const outputFileName = `${sessionId}.mp4`;
-    const outputPath = path.join(OUTPUT_DIR, outputFileName);
-
-    // Add job to the queue
-    const job = await clipQueue.add('createClip', { mediaItems, outputPath, sessionId });
-    log('info', `Clip creation job added to queue`, { sessionId, jobId: job.id });
+        duration: parseFloat(metadata[`duration${index}`]),
+        type: metadata[`type${index}`],
+        text: metadata[`text${index}`],
+      })),
+      outputPath: path.join(OUTPUT_DIR, `${sessionId}.mp4`),
+      sessionId,
+    });
 
     return NextResponse.json({ 
-      message: 'Clip creation job added to queue', 
-      jobId: job.id,
-      sessionId
+      success: true, 
+      message: 'Clip creation job queued',
+      jobId: jobId.id,
+      sessionId 
     });
+
   } catch (error) {
-    log('error', 'Error in POST handler', { sessionId, error });
-    return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
+    console.error('Error processing request:', error instanceof Error ? error.message : String(error));
+    return NextResponse.json({ error: 'Error processing request' }, { status: 500 });
   }
 }
 
 async function createClip(mediaItems: any[], outputPath: string, jobId: string) {
-  log('info', `Starting clip creation`, { jobId });
-  let command = ffmpeg();
-
-  // Ensure the necessary fonts are installed on the server
-  // For Render, you might need to install fonts in the build process
-  const fontPath = '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf';
-
   try {
+    log('info', `Starting clip creation`, { jobId });
+    let command = ffmpeg();
+
+    const fontPath = '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf';
+    if (!fs.existsSync(fontPath)) {
+      log('warn', `Font file not found: ${fontPath}. Text overlays may not work.`, { jobId });
+    }
+
+    let totalDuration = 0;
+    const filters = [];
+    const inputs = [];
+
     for (let i = 0; i < mediaItems.length; i++) {
       const item = mediaItems[i];
       const fadeDuration = 0.5;
+      const duration = item.type === 'video' ? Math.min(item.duration, 30) : item.duration;
 
+      command = command.input(item.path);
       if (item.type === 'image') {
-        command = command.input(item.path)
-          .loop(item.duration)
-          .inputOptions(`-t ${item.duration}`);
-      } else {
-        command = command.input(item.path)
-          .inputOptions(`-t ${Math.min(item.duration, 30)}`);
+        command = command.loop(duration);
       }
+      command = command.inputOptions(`-t ${duration}`);
 
-      if (i > 0) {
-        command = command.complexFilter([
-          `[${i-1}:v]fade=t=out:st=${item.duration - fadeDuration}:d=${fadeDuration}[fade${i-1}]`,
-          `[${i}:v]fade=t=in:st=0:d=${fadeDuration}[fade${i}]`,
-          `[fade${i-1}][fade${i}]overlay=shortest=1`
-        ]);
-      }
+      filters.push(`[${i}:v]scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,setsar=1,fade=t=in:st=0:d=${fadeDuration},fade=t=out:st=${duration - fadeDuration}:d=${fadeDuration}[v${i}]`);
 
-      // Add text overlay with animation
       if (item.text) {
-        command = command.complexFilter([
-          `drawtext=fontfile=${fontPath}:fontsize=24:fontcolor=white@0.8:box=1:boxcolor=black@0.4:boxborderw=5:x=(w-tw)/2:y=h-th-20:text='${item.text}':enable='between(t,0,${item.duration-0.5})':alpha='if(lt(t,${item.duration-0.5}),1,0)'`
-        ]);
+        filters.push(`[v${i}]drawtext=fontfile=${fontPath}:fontsize=24:fontcolor=white:box=1:boxcolor=black@0.5:boxborderw=5:x=(w-tw)/2:y=h-th-20:text='${item.text}'[v${i}text]`);
+        inputs.push(`[v${i}text]`);
+      } else {
+        inputs.push(`[v${i}]`);
       }
+
+      totalDuration += duration;
     }
 
-    command.outputOptions('-movflags faststart')
+    filters.push(`${inputs.join('')}concat=n=${mediaItems.length}:v=1:a=0[outv]`);
+
+    command.complexFilter(filters)
+      .outputOptions('-map', '[outv]')
+      .outputOptions('-movflags', 'faststart')
+      // Add compression settings for Facebook
+      .outputOptions('-c:v', 'libx264')
+      .outputOptions('-preset', 'slow')
+      .outputOptions('-crf', '23')
+      .outputOptions('-maxrate', '1M')
+      .outputOptions('-bufsize', '2M')
       .output(outputPath);
 
     return new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        command.kill('SIGTERM');
+        reject(new Error('FFmpeg process timed out after 10 minutes'));
+      }, 10 * 60 * 1000); // 10 minutes timeout
+
+      let lastProgress = 0;
       command.on('start', (commandLine) => {
         log('info', `FFmpeg command: ${commandLine}`, { jobId });
+        console.log('\nFFmpeg Progress:');
+      }).on('progress', (progress) => {
+        if (progress.percent) {
+          const currentProgress = Math.floor(progress.percent);
+          if (currentProgress > lastProgress) {
+            process.stdout.write(`\r[${'='.repeat(currentProgress)}${' '.repeat(100 - currentProgress)}] ${currentProgress}%`);
+            lastProgress = currentProgress;
+          }
+        }
       }).on('end', () => {
+        clearTimeout(timeout);
+        process.stdout.write('\n');
         log('info', `Clip creation completed`, { jobId });
-        resolve(null);
+        resolve(totalDuration);
       }).on('error', (err) => {
-        log('error', `Error in clip creation`, { jobId, error: err });
+        clearTimeout(timeout);
+        process.stdout.write('\n');
+        log('error', `Error in clip creation`, { jobId, error: err.message });
         reject(err);
       }).run();
     });
   } catch (error) {
-    log('error', `Error in createClip function`, { jobId, error });
+    log('error', `Error in createClip function`, { 
+      jobId, 
+      error: error instanceof Error ? error.message : String(error),
+      stack: error instanceof Error ? error.stack : undefined
+    });
     throw error;
   }
 }
@@ -168,39 +207,69 @@ async function processClipJob(job: Job<any, any, string>) {
   
   try {
     log('info', `Processing clip job`, { jobId, sessionId });
-    await createClip(mediaItems, outputPath, jobId);
+    const totalDuration = await createClip(mediaItems, outputPath, jobId);
     
-    if (WEBHOOK_URL) {
-      // Send the clip to the webhook
-      log('info', `Sending clip to webhook`, { jobId, sessionId });
-      const response = await fetch(WEBHOOK_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ clipUrl: outputPath, sessionId }),
-      });
+    if (await fs.pathExists(outputPath)) {
+      const fileStats = await fs.stat(outputPath);
+      const fileSize = fileStats.size;
+      const dateCreated = new Date().toISOString();
 
-      if (!response.ok) {
-        throw new Error('Failed to send clip to webhook');
+      if (WEBHOOK_URL) {
+        try {
+          log('info', `Sending clip to webhook`, { jobId, sessionId });
+          const response = await fetch(WEBHOOK_URL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              clipUrl: outputPath,
+              sessionId,
+              fileSize,
+              duration: totalDuration,
+              dateCreated,
+              mediaItemCount: mediaItems.length
+            }),
+          });
+
+          if (!response.ok) {
+            throw new Error(`Failed to send clip to webhook: ${response.status} ${response.statusText}`);
+          }
+          log('info', `Clip sent to webhook successfully`, { jobId, sessionId });
+        } catch (error) {
+          log('error', `Error sending clip to webhook`, { 
+            jobId, 
+            sessionId, 
+            error: error instanceof Error ? error.message : String(error)
+          });
+        }
+      } else {
+        log('warn', `Webhook URL not set, skipping webhook call`, { jobId, sessionId });
       }
+
+      // Schedule output file cleanup
+      setTimeout(async () => {
+        try {
+          await fs.remove(outputPath);
+          log('info', `Cleaned up output file`, { jobId, sessionId, outputPath });
+        } catch (error) {
+          log('error', `Error cleaning up output file`, { jobId, sessionId, outputPath, error });
+        }
+      }, 5 * 60 * 1000); // 5 minutes
+
+      log('info', `Clip job processed successfully`, { jobId, sessionId });
+      console.log('\n\x1b[32m%s\x1b[0m', `Clip creation completed! Output file: ${outputPath}`);
+      return { success: true, clipUrl: outputPath };
     } else {
-      log('warn', `Webhook URL not set, skipping webhook call`, { jobId, sessionId });
+      throw new Error('Output file was not created');
     }
-
-    // Schedule file cleanup
-    setTimeout(async () => {
-      try {
-        await fs.remove(outputPath);
-        log('info', `Cleaned up file`, { jobId, sessionId, outputPath });
-      } catch (error) {
-        log('error', `Error cleaning up file`, { jobId, sessionId, outputPath, error });
-      }
-    }, 15 * 60 * 1000); // 15 minutes
-
-    log('info', `Clip job processed successfully`, { jobId, sessionId });
-    return { success: true, clipUrl: outputPath };
   } catch (error) {
-    log('error', `Error processing clip job`, { jobId, sessionId, error });
-    throw error;
+    log('error', `Error processing clip job`, { 
+      jobId, 
+      sessionId, 
+      error: error instanceof Error ? error.message : String(error)
+    });
+  } finally {
+    // Clean up temporary files
+    await cleanupTempFiles(mediaItems);
   }
 }
 
@@ -209,7 +278,7 @@ const worker = new Worker<any, any, string>('clipCreation', processClipJob, { co
 
 // Error handler for the worker
 worker.on('error', (error) => {
-  log('error', `Worker error`, { error });
+  log('error', `Worker error`, { error: error instanceof Error ? error.message : String(error) });
 });
 
 // Completed job handler
@@ -224,8 +293,23 @@ worker.on('completed', (job) => {
 // Failed job handler
 worker.on('failed', (job, error) => {
   if (job) {
-    log('error', `Job failed`, { jobId: job.id, error });
+    log('error', `Job failed`, { 
+      jobId: job.id, 
+      error: error instanceof Error ? error.message : String(error)
+    });
   } else {
-    log('error', `Job failed, but job object is undefined`, { error });
+    log('error', `Job failed, but job object is undefined`, { 
+      error: error instanceof Error ? error.message : String(error)
+    });
   }
 });
+
+async function cleanupTempFiles(mediaItems: any[]) {
+  for (const item of mediaItems) {
+    try {
+      await fs.remove(item.path);
+    } catch (error) {
+      log('error', `Error cleaning up temp file`, { path: item.path, error });
+    }
+  }
+}

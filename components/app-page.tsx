@@ -102,7 +102,7 @@ export function Page() {
         return newMediaItems
       })
     } catch (error) {
-      console.error('Error processing file:', error)
+      console.error('Error processing file:', error instanceof Error ? error.message : String(error))
       toast.error('Error processing file. Please try again.')
     }
   }
@@ -130,33 +130,34 @@ export function Page() {
         formData.append(`text${index}`, textAreaValues[index]);
       });
 
+      setMediaItems([]);
       const response = await fetch('/api/create-clip', {
         method: 'POST',
         body: formData,
       });
 
       if (!response.ok) {
-        throw new Error('Failed to create clip');
+        const errorText = await response.text();
+        throw new Error(`Failed to create clip: ${response.status} ${response.statusText}. ${errorText}`);
       }
 
       const data = await response.json();
-      toast.success('הקליפ נוצר בהצלחה!');
-      
-      // Provide a link to the created video
-      const videoLink = `<a href="${data.videoUrl}" target="_blank">צפה בקליפ</a>`;
-      toast((t) => (
-        <span>
-          הקליפ מוכן! {' '}
-          <span dangerouslySetInnerHTML={{ __html: videoLink }} />
-        </span>
-      ), { duration: 5000 });
+      if (data.success) {
+        toast.success('הקליפ נוצר בהצלחה!');
+        toast((t) => (
+          <span>
+            הקליפ בהכנה. מזהה עבודה: {data.jobId}
+          </span>
+        ), { duration: 5000 });
+      } else {
+        throw new Error(data.error || 'Unknown error occurred');
+      }
 
       // Reset state
-      setMediaItems([]);
       setTextAreaValues(Array(5).fill(''));
       setTextAreaFocused(Array(5).fill(false));
     } catch (error) {
-      console.error('Error creating clip:', error);
+      console.error('Error creating clip:', error instanceof Error ? error.message : String(error));
       toast.error('שגיאה ביצירת הקליפ. אנא נסה שוב.');
     }
   };
@@ -201,6 +202,8 @@ export function Page() {
           default:
             errorMessage = `Camera error: ${error.message}`
         }
+      } else if (error instanceof Error) {
+        errorMessage = `Camera error: ${error.message}`
       }
       toast.error(errorMessage)
     }
@@ -318,7 +321,7 @@ export function Page() {
 
         stopCapture()
       } catch (error) {
-        console.error('Error confirming capture:', error)
+        console.error('Error confirming capture:', error instanceof Error ? error.message : String(error))
         toast.error('Error confirming capture. Please try again.')
       }
     }

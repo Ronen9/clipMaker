@@ -5,6 +5,9 @@ const nextConfig = {
     WEBHOOK_URL: process.env.WEBHOOK_URL,
   },
   webpack: (config, { isServer }) => {
+    if (isServer) {
+      config.externals.push('ffmpeg-static');
+    }
     // Add this rule to ignore warnings from fluent-ffmpeg
     config.module.rules.push({
       test: /node_modules\/fluent-ffmpeg/,
