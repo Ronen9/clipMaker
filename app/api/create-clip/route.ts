@@ -112,12 +112,14 @@ export async function POST(req: NextRequest) {
 
 async function createClip(mediaItems: any[], outputPath: string, jobId: string) {
   try {
-    log('info', `Starting clip creation`, { jobId });
+    log('info', `Starting clip creation`, { jobId, mediaItemCount: mediaItems.length, outputPath });
     let command = ffmpeg();
 
-    const fontPath = '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf';
+    const fontPath = path.join(process.cwd(), 'assets', 'fonts', 'DejaVuSans-Bold.ttf');
     if (!fs.existsSync(fontPath)) {
       log('warn', `Font file not found: ${fontPath}. Text overlays may not work.`, { jobId });
+    } else {
+      log('info', `Font file found: ${fontPath}`, { jobId });
     }
 
     let totalDuration = 0;
@@ -127,7 +129,9 @@ async function createClip(mediaItems: any[], outputPath: string, jobId: string) 
     for (let i = 0; i < mediaItems.length; i++) {
       const item = mediaItems[i];
       const fadeDuration = 0.5;
-      const duration = item.type === 'video' ? Math.min(item.duration, 30) : item.duration;
+      const duration = parseFloat(item.duration);
+
+      log('info', `Processing media item ${i + 1}`, { jobId, type: item.type, duration, text: item.text });
 
       command = command.input(item.path);
       if (item.type === 'image') {
@@ -135,14 +139,16 @@ async function createClip(mediaItems: any[], outputPath: string, jobId: string) 
       }
       command = command.inputOptions(`-t ${duration}`);
 
-      filters.push(`[${i}:v]scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,setsar=1,fade=t=in:st=0:d=${fadeDuration},fade=t=out:st=${duration - fadeDuration}:d=${fadeDuration}[v${i}]`);
-
+      let filterString = `[${i}:v]scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,setsar=1`;
+      
       if (item.text) {
-        filters.push(`[v${i}]drawtext=fontfile=${fontPath}:fontsize=24:fontcolor=white:box=1:boxcolor=black@0.5:boxborderw=5:x=(w-tw)/2:y=h-th-20:text='${item.text}'[v${i}text]`);
-        inputs.push(`[v${i}text]`);
-      } else {
-        inputs.push(`[v${i}]`);
+        filterString += `,drawtext=fontfile='${fontPath}':fontsize=24:fontcolor=white:box=1:boxcolor=black@0.5:boxborderw=5:x=(w-tw)/2:y=h-th-20:text='${item.text}'`;
       }
+      
+      filterString += `,fade=t=in:st=0:d=${fadeDuration},fade=t=out:st=${duration - fadeDuration}:d=${fadeDuration}[v${i}]`;
+      
+      filters.push(filterString);
+      inputs.push(`[v${i}]`);
 
       totalDuration += duration;
     }
@@ -151,10 +157,10 @@ async function createClip(mediaItems: any[], outputPath: string, jobId: string) 
 
     command.complexFilter(filters)
       .outputOptions('-map', '[outv]')
+      .outputOptions('-t', totalDuration.toString())
       .outputOptions('-movflags', 'faststart')
-      // Add compression settings for Facebook
       .outputOptions('-c:v', 'libx264')
-      .outputOptions('-preset', 'slow')
+      .outputOptions('-preset', 'medium')
       .outputOptions('-crf', '23')
       .outputOptions('-maxrate', '1M')
       .outputOptions('-bufsize', '2M')
@@ -163,29 +169,25 @@ async function createClip(mediaItems: any[], outputPath: string, jobId: string) 
     return new Promise((resolve, reject) => {
       const timeout = setTimeout(() => {
         command.kill('SIGTERM');
-        reject(new Error('FFmpeg process timed out after 10 minutes'));
-      }, 10 * 60 * 1000); // 10 minutes timeout
+        reject(new Error('FFmpeg process timed out after 4 minutes'));
+      }, 4 * 60 * 1000);
 
-      let lastProgress = 0;
+      let lastProgress = Date.now();
       command.on('start', (commandLine) => {
         log('info', `FFmpeg command: ${commandLine}`, { jobId });
         console.log('\nFFmpeg Progress:');
       }).on('progress', (progress) => {
-        if (progress.percent) {
-          const currentProgress = Math.floor(progress.percent);
-          if (currentProgress > lastProgress) {
-            process.stdout.write(`\r[${'='.repeat(currentProgress)}${' '.repeat(100 - currentProgress)}] ${currentProgress}%`);
-            lastProgress = currentProgress;
-          }
+        const now = Date.now();
+        if (now - lastProgress > 1000) {  // Log progress every second
+          log('info', `FFmpeg progress: ${progress.percent ? progress.percent.toFixed(2) + '%' : 'Processing frame ' + progress.frames}`, { jobId });
+          lastProgress = now;
         }
       }).on('end', () => {
         clearTimeout(timeout);
-        process.stdout.write('\n');
-        log('info', `Clip creation completed`, { jobId });
+        log('info', `Clip creation completed`, { jobId, totalDuration, outputPath });
         resolve(totalDuration);
       }).on('error', (err) => {
         clearTimeout(timeout);
-        process.stdout.write('\n');
         log('error', `Error in clip creation`, { jobId, error: err.message });
         reject(err);
       }).run();
