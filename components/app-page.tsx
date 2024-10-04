@@ -410,24 +410,6 @@ export function Page() {
     }
   }
 
-  const handleCreateClip = async () => {
-    try {
-      console.log('Starting clip creation...');
-      const response = await fetch('/api/create-clip', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ mediaItems }),
-      });
-      console.log('API response status:', response.status);
-      const data = await response.json();
-      console.log('API response data:', data);
-      // ... rest of your code
-    } catch (error) {
-      console.error('Error creating clip:', error);
-      // ... error handling
-    }
-  };
-
   return (
     <div className="min-h-screen bg-gradient-to-br from-purple-100 to-indigo-100 p-4 md:p-6 lg:p-8">
       <Toaster position="top-center" />
