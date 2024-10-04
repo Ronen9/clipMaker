@@ -10,7 +10,7 @@ import { Queue, Worker, Job } from 'bullmq';
 import Redis, { RedisOptions } from 'ioredis';
 
 // Add a simple logging function
-function log(level: 'info' | 'warn' | 'error', message: string, meta?: any) {
+function log(level: 'info' | 'warn' | 'error' | 'debug', message: string, meta?: any) {
   const timestamp = new Date().toISOString();
   console[level](`[${timestamp}] ${level.toUpperCase()}: ${message}`, meta);
 }
@@ -131,21 +131,23 @@ async function createClip(mediaItems: any[], outputPath: string, jobId: string) 
       const fadeDuration = 0.5;
       const duration = parseFloat(item.duration);
 
-      log('info', `Processing media item ${i + 1}`, { jobId, type: item.type, duration, text: item.text });
+      log('info', `Processing media item ${i + 1}`, { jobId, type: item.type, duration, text: item.text, path: item.path });
 
-      command = command.input(item.path);
       if (item.type === 'image') {
-        command = command.loop(duration);
+        command = command.input(item.path).loop(duration);
+      } else if (item.type === 'video') {
+        command = command.input(item.path);
       }
-      command = command.inputOptions(`-t ${duration}`);
 
-      let filterString = `[${i}:v]scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,setsar=1`;
+      let filterString = `[${i}:v]scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30`;
       
       if (item.text) {
         filterString += `,drawtext=fontfile='${fontPath}':fontsize=24:fontcolor=white:box=1:boxcolor=black@0.5:boxborderw=5:x=(w-tw)/2:y=h-th-20:text='${item.text}'`;
       }
       
-      filterString += `,fade=t=in:st=0:d=${fadeDuration},fade=t=out:st=${duration - fadeDuration}:d=${fadeDuration}[v${i}]`;
+      filterString += `,fade=t=in:st=0:d=${fadeDuration},fade=t=out:st=${duration - fadeDuration}:d=${fadeDuration}`;
+      
+      filterString += `,trim=duration=${duration}[v${i}]`;
       
       filters.push(filterString);
       inputs.push(`[v${i}]`);
@@ -158,28 +160,35 @@ async function createClip(mediaItems: any[], outputPath: string, jobId: string) 
     command.complexFilter(filters)
       .outputOptions('-map', '[outv]')
       .outputOptions('-t', totalDuration.toString())
-      .outputOptions('-movflags', 'faststart')
+      .outputOptions('-movflags', '+faststart')
       .outputOptions('-c:v', 'libx264')
-      .outputOptions('-preset', 'medium')
+      .outputOptions('-preset', 'ultrafast')
       .outputOptions('-crf', '23')
-      .outputOptions('-maxrate', '1M')
-      .outputOptions('-bufsize', '2M')
       .output(outputPath);
 
     return new Promise((resolve, reject) => {
       const timeout = setTimeout(() => {
         command.kill('SIGTERM');
-        reject(new Error('FFmpeg process timed out after 4 minutes'));
-      }, 4 * 60 * 1000);
+        reject(new Error('FFmpeg process timed out after 15 minutes'));
+      }, 15 * 60 * 1000); // Increased timeout to 15 minutes
 
       let lastProgress = Date.now();
       command.on('start', (commandLine) => {
         log('info', `FFmpeg command: ${commandLine}`, { jobId });
         console.log('\nFFmpeg Progress:');
+      }).on('stderr', (stderrLine) => {
+        log('debug', `FFmpeg stderr: ${stderrLine}`, { jobId });
       }).on('progress', (progress) => {
         const now = Date.now();
         if (now - lastProgress > 1000) {  // Log progress every second
-          log('info', `FFmpeg progress: ${progress.percent ? progress.percent.toFixed(2) + '%' : 'Processing frame ' + progress.frames}`, { jobId });
+          let progressMessage = 'Processing...';
+          if (progress.percent !== undefined && !isNaN(progress.percent)) {
+            const percent = Math.max(0, Math.min(100, progress.percent));
+            progressMessage = `Progress: ${percent.toFixed(2)}%`;
+          } else if (progress.frames !== undefined && !isNaN(progress.frames)) {
+            progressMessage = `Processing frame: ${progress.frames}`;
+          }
+          log('info', progressMessage, { jobId });
           lastProgress = now;
         }
       }).on('end', () => {
@@ -208,13 +217,13 @@ async function processClipJob(job: Job<any, any, string>) {
   const jobId = job.id || 'unknown';
   
   try {
-    log('info', `Processing clip job`, { jobId, sessionId });
+    log('info', `Processing clip job`, { jobId, sessionId, mediaItemCount: mediaItems.length });
     const totalDuration = await createClip(mediaItems, outputPath, jobId);
     
     if (await fs.pathExists(outputPath)) {
       const fileStats = await fs.stat(outputPath);
       const fileSize = fileStats.size;
-      const dateCreated = new Date().toISOString();
+      log('info', `Output file created`, { jobId, sessionId, outputPath, fileSize, totalDuration });
 
       if (WEBHOOK_URL) {
         try {
@@ -227,7 +236,7 @@ async function processClipJob(job: Job<any, any, string>) {
               sessionId,
               fileSize,
               duration: totalDuration,
-              dateCreated,
+              dateCreated: new Date().toISOString(),
               mediaItemCount: mediaItems.length
             }),
           });
@@ -267,11 +276,20 @@ async function processClipJob(job: Job<any, any, string>) {
     log('error', `Error processing clip job`, { 
       jobId, 
       sessionId, 
-      error: error instanceof Error ? error.message : String(error)
+      error: error instanceof Error ? error.message : String(error),
+      stack: error instanceof Error ? error.stack : undefined
     });
+    return { success: false, error: error instanceof Error ? error.message : String(error) };
   } finally {
-    // Clean up temporary files
-    await cleanupTempFiles(mediaItems);
+    try {
+      await cleanupTempFiles(mediaItems);
+    } catch (cleanupError) {
+      log('error', `Error cleaning up temp files`, { 
+        jobId, 
+        sessionId, 
+        error: cleanupError instanceof Error ? cleanupError.message : String(cleanupError)
+      });
+    }
   }
 }
 

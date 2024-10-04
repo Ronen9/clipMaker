@@ -130,7 +130,6 @@ export function Page() {
         formData.append(`text${index}`, textAreaValues[index]);
       });
 
-      setMediaItems([]);
       const response = await fetch('/api/create-clip', {
         method: 'POST',
         body: formData,
@@ -149,13 +148,18 @@ export function Page() {
             הקליפ בהכנה. מזהה עבודה: {data.jobId}
           </span>
         ), { duration: 5000 });
+
+        // Reset all state
+        setMediaItems([]);
+        setTextAreaValues(Array(5).fill(''));
+        setTextAreaFocused(Array(5).fill(false));
+        resetCaptureState();
+        stopCapture();
+        setCaptureMode(null);
+        setCurrentIndex(null);
       } else {
         throw new Error(data.error || 'Unknown error occurred');
       }
-
-      // Reset state
-      setTextAreaValues(Array(5).fill(''));
-      setTextAreaFocused(Array(5).fill(false));
     } catch (error) {
       console.error('Error creating clip:', error instanceof Error ? error.message : String(error));
       toast.error('שגיאה ביצירת הקליפ. אנא נסה שוב.');
@@ -331,6 +335,8 @@ export function Page() {
     setCapturedMedia(null)
     setCapturedMediaURL(null)
     setIsCameraReady(false)
+    setIsCapturing(false)
+    setIsRecording(false)
   }, [])
 
   const playVideoInThumbnail = (index: number) => {
