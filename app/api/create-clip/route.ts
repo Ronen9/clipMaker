@@ -179,26 +179,32 @@ async function createClip(mediaItems: any[], outputPath: string, jobId: string) 
       }).on('stderr', (stderrLine) => {
         log('debug', `FFmpeg stderr: ${stderrLine}`, { jobId });
       }).on('progress', (progress) => {
-        const now = Date.now();
-        if (now - lastProgress > 1000) {  // Log progress every second
-          let progressMessage = 'Processing...';
-          if (progress.percent !== undefined && !isNaN(progress.percent)) {
-            const percent = Math.max(0, Math.min(100, progress.percent));
-            progressMessage = `Progress: ${percent.toFixed(2)}%`;
-          } else if (progress.frames !== undefined && !isNaN(progress.frames)) {
-            progressMessage = `Processing frame: ${progress.frames}`;
+        try {
+          const now = Date.now();
+          if (now - lastProgress > 1000) {  // Log progress every second
+            let progressMessage = 'Processing...';
+            if (progress.percent !== undefined && !isNaN(progress.percent)) {
+              const percent = Math.max(0, Math.min(100, progress.percent));
+              progressMessage = `Progress: ${percent.toFixed(2)}%`;
+            } else if (progress.frames !== undefined && !isNaN(progress.frames)) {
+              const estimatedTotalFrames = totalDuration * 30; // Assuming 30 fps
+              const percent = Math.min(100, (progress.frames / estimatedTotalFrames) * 100);
+              progressMessage = `Progress: ${percent.toFixed(2)}% (Frame ${progress.frames})`;
+            }
+            log('info', progressMessage, { jobId });
+            lastProgress = now;
           }
-          log('info', progressMessage, { jobId });
-          lastProgress = now;
+        } catch (error) {
+          log('error', `Error in progress reporting`, { jobId, error: error instanceof Error ? error.message : String(error) });
         }
-      }).on('end', () => {
-        clearTimeout(timeout);
-        log('info', `Clip creation completed`, { jobId, totalDuration, outputPath });
-        resolve(totalDuration);
       }).on('error', (err) => {
         clearTimeout(timeout);
         log('error', `Error in clip creation`, { jobId, error: err.message });
         reject(err);
+      }).on('end', () => {
+        clearTimeout(timeout);
+        log('info', `Clip creation completed`, { jobId, totalDuration, outputPath });
+        resolve(totalDuration);
       }).run();
     });
   } catch (error) {
@@ -217,13 +223,13 @@ async function processClipJob(job: Job<any, any, string>) {
   const jobId = job.id || 'unknown';
   
   try {
-    log('info', `Processing clip job`, { jobId, sessionId, mediaItemCount: mediaItems.length });
+    log('info', `Processing clip job`, { jobId, sessionId });
     const totalDuration = await createClip(mediaItems, outputPath, jobId);
     
     if (await fs.pathExists(outputPath)) {
       const fileStats = await fs.stat(outputPath);
       const fileSize = fileStats.size;
-      log('info', `Output file created`, { jobId, sessionId, outputPath, fileSize, totalDuration });
+      const dateCreated = new Date().toISOString();
 
       if (WEBHOOK_URL) {
         try {
@@ -236,7 +242,7 @@ async function processClipJob(job: Job<any, any, string>) {
               sessionId,
               fileSize,
               duration: totalDuration,
-              dateCreated: new Date().toISOString(),
+              dateCreated,
               mediaItemCount: mediaItems.length
             }),
           });
@@ -279,17 +285,11 @@ async function processClipJob(job: Job<any, any, string>) {
       error: error instanceof Error ? error.message : String(error),
       stack: error instanceof Error ? error.stack : undefined
     });
+    // Instead of re-throwing, we'll return an error object
     return { success: false, error: error instanceof Error ? error.message : String(error) };
   } finally {
-    try {
-      await cleanupTempFiles(mediaItems);
-    } catch (cleanupError) {
-      log('error', `Error cleaning up temp files`, { 
-        jobId, 
-        sessionId, 
-        error: cleanupError instanceof Error ? cleanupError.message : String(cleanupError)
-      });
-    }
+    // Clean up temporary files
+    await cleanupTempFiles(mediaItems);
   }
 }
 
