@@ -44,7 +44,7 @@ export function Page() {
       const video = document.createElement('video')
       video.preload = 'metadata'
       video.onloadeddata = () => {
-        video.currentTime = 1 // Set to 1 second or another appropriate time
+        video.currentTime = 0 // Set to 0 to capture the first frame
       }
       video.onseeked = () => {
         const canvas = document.createElement('canvas')
@@ -66,26 +66,48 @@ export function Page() {
 
   const processFile = async (file: File, index: number) => {
     try {
-      let preview: string
-      let aspectRatio: number
-      let type: 'image' | 'video'
+      let type: 'image' | 'video' = 'image';
+      let preview = ''
+      let aspectRatio = 1
+      let duration = 0
 
-      if (file.type.startsWith('image/')) {
-        type = 'image'
-        const img = await createImageBitmap(file)
-        aspectRatio = img.width / img.height
-        preview = URL.createObjectURL(file)
-      } else if (file.type.startsWith('video/')) {
+      if (file.type.startsWith('video/')) {
         type = 'video'
         preview = await createVideoThumbnail(file)
         const video = document.createElement('video')
-        video.src = URL.createObjectURL(file)
-        await new Promise((resolve) => {
+        video.preload = 'metadata'
+        const blobUrl = URL.createObjectURL(file)
+        video.src = blobUrl
+
+        duration = await new Promise<number>((resolve) => {
           video.onloadedmetadata = () => {
             aspectRatio = video.videoWidth / video.videoHeight
-            resolve(null)
+            if (isFinite(video.duration) && video.duration > 0) {
+              resolve(video.duration)
+            } else {
+              resolve(10)
+            }
+          }
+          video.onerror = () => {
+            console.error('Error loading video metadata')
+            resolve(10)
           }
         })
+        URL.revokeObjectURL(blobUrl)  // Revoke the blob URL after we're done with it
+      } else if (file.type.startsWith('image/')) {
+        type = 'image'
+        const img = new Image()
+        const blobUrl = URL.createObjectURL(file)
+        img.src = blobUrl
+        await new Promise<void>((resolve) => {
+          img.onload = () => {
+            aspectRatio = img.width / img.height
+            preview = blobUrl  // Use the blob URL as the preview
+            resolve()
+          }
+        })
+        // Don't revoke the blob URL here, as we're using it for the preview
+        duration = 4
       } else {
         throw new Error('Unsupported file type')
       }
@@ -94,7 +116,7 @@ export function Page() {
         const newMediaItems = [...prevItems]
         newMediaItems[index] = {
           file,
-          duration: 4,
+          duration,
           preview,
           aspectRatio,
           type
@@ -121,15 +143,23 @@ export function Page() {
   }, [mediaItems])
 
   const handleSubmit = async () => {
+    const formData = new FormData();
+    
+    for (let i = 0; i < mediaItems.length; i++) {
+      const item = mediaItems[i];
+      formData.append(`file${i}`, item.file);
+      formData.append(`type${i}`, item.type);
+      formData.append(`text${i}`, textAreaValues[i] || '');
+      
+      if (item.type === 'video') {
+        const duration = await getVideoDuration(item.file);
+        formData.append(`duration${i}`, isFinite(duration) ? duration.toString() : '10');
+      } else {
+        formData.append(`duration${i}`, isFinite(item.duration) ? item.duration.toString() : '4');
+      }
+    }
+    
     try {
-      const formData = new FormData();
-      mediaItems.forEach((item, index) => {
-        formData.append(`file${index}`, item.file);
-        formData.append(`duration${index}`, item.duration.toString());
-        formData.append(`type${index}`, item.type);
-        formData.append(`text${index}`, textAreaValues[index]);
-      });
-
       const response = await fetch('/api/create-clip', {
         method: 'POST',
         body: formData,
@@ -418,6 +448,20 @@ export function Page() {
       setTextAreaValues(newValues)
     }
   }
+
+  const getVideoDuration = (file: File): Promise<number> => {
+    return new Promise((resolve) => {
+      const video = document.createElement('video');
+      video.preload = 'metadata';
+      video.onloadedmetadata = () => {
+        window.URL.revokeObjectURL(video.src);
+        const durationInSeconds = Math.round(video.duration);
+        console.log(`Video duration: ${durationInSeconds} seconds`);
+        resolve(durationInSeconds);
+      };
+      video.src = URL.createObjectURL(file);
+    });
+  };
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-purple-100 to-indigo-100 p-4 md:p-6 lg:p-8">
