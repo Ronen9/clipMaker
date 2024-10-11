@@ -119,9 +119,17 @@ async function createClip(mediaItems: MediaItem[], outputPath: string, jobId: st
     log('info', `Starting clip creation`, { jobId, mediaItemCount: mediaItems.length, outputPath });
     let command = ffmpeg();
 
-    const fontPath = path.join(process.cwd(), 'assets', 'fonts', 'DejaVuSans-Bold.ttf');
+    let fontPath = path.join(process.cwd(), 'assets', 'fonts', 'DejaVuSans-Bold.ttf');
     if (!fs.existsSync(fontPath)) {
-      log('warn', `Font file not found: ${fontPath}. Text overlays may not work.`, { jobId });
+      log('warn', `Font file not found: ${fontPath}. Falling back to system font.`, { jobId });
+      fontPath = '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf'; // Linux fallback
+      if (!fs.existsSync(fontPath)) {
+        fontPath = 'C:\\Windows\\Fonts\\arial.ttf'; // Windows fallback
+        if (!fs.existsSync(fontPath)) {
+          log('error', `No suitable font found. Text overlays may not work.`, { jobId });
+          fontPath = '';
+        }
+      }
     } else {
       log('info', `Font file found: ${fontPath}`, { jobId });
     }
@@ -166,13 +174,15 @@ async function createClip(mediaItems: MediaItem[], outputPath: string, jobId: st
       
       inputs.push(`[v${i}]`);
 
-      if (item.text) {
-        filters.push(`[v${i}]drawtext=fontfile='${fontPath}':fontsize=24:fontcolor=white:x=(w-tw)/2:y=h-th-10:text='${item.text}'[v${i}text]`);
+      if (item.text && fontPath) {
+        filters.push(`[v${i}]drawtext=fontfile='${fontPath}':fontsize=36:fontcolor=white:box=1:boxcolor=black@0.5:boxborderw=5:x=(w-tw)/2:y=h-th-20:text='${item.text}'[v${i}text]`);
         inputs[inputs.length - 1] = `[v${i}text]`;
+      } else if (item.text) {
+        log('warn', `Skipping text overlay for item ${i} due to missing font`, { jobId });
       }
     }
 
-    filters.push(`${inputs.join('')}concat=n=${mediaItems.length}:v=1:a=0[outv]`);
+    filters.push(`${inputs.join('')}concat=n=${mediaItems.length}:v=1:a=0,drawtext=fontfile='${fontPath}':fontsize=1:fontcolor=white:box=1:boxcolor=white@0.0:boxborderw=0:x=(w-tw)/2:y=(h-th)/2:text=[outv]`);
 
     command.complexFilter(filters)
       .outputOptions('-map', '[outv]')

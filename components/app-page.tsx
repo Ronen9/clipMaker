@@ -11,12 +11,14 @@ import { motion, AnimatePresence } from 'framer-motion'
 import { Textarea } from "@/components/ui/textarea"
 import { cn } from "@/lib/utils"
 
-type MediaItem = {
+interface MediaItem {
   file: File
   duration: number
   preview: string
   aspectRatio: number
   type: 'image' | 'video'
+  path?: string  // Optional, as it might not be used in the frontend
+  text: string
 }
 
 type CaptureMode = 'image' | 'video' | null
@@ -145,7 +147,8 @@ export function Page() {
           duration,
           preview,
           aspectRatio,
-          type
+          type,
+          text: textAreaValues[index] || ''
         }
         return newMediaItems
       })
@@ -392,7 +395,8 @@ export function Page() {
             duration,
             preview,
             aspectRatio,
-            type: captureMode === 'image' ? 'image' : 'video'
+            type: captureMode === 'image' ? 'image' : 'video',
+            text: textAreaValues[currentIndex] || ''
           }
           return newMediaItems
         })
@@ -403,7 +407,7 @@ export function Page() {
         toast.error('Error confirming capture. Please try again.')
       }
     }
-  }, [capturedMedia, currentIndex, captureMode, capturedMediaURL, stopCapture, recordingDuration, createThumbnailFromVideo])
+  }, [capturedMedia, currentIndex, captureMode, capturedMediaURL, stopCapture, recordingDuration, createThumbnailFromVideo, textAreaValues])
 
   const resetCaptureState = useCallback(() => {
     setCapturedMedia(null)
