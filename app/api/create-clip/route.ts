@@ -69,12 +69,15 @@ export async function POST(req: NextRequest) {
     const metadata: Record<string, any> = {};
     const savedFilePaths: string[] = [];
 
+    let fileIndex = 0;
     for (const [key, value] of Array.from(formData.entries())) {
       if (value instanceof File) {
-        const filePath = path.join(TEMP_DIR, `${sessionId}_${value.name}`);
+        const uniqueFileName = `${sessionId}_${fileIndex}_${value.name}`;
+        const filePath = path.join(TEMP_DIR, uniqueFileName);
         await fs.writeFile(filePath, Buffer.from(await value.arrayBuffer()));
         savedFilePaths.push(filePath);
         files.push(value);
+        fileIndex++;
       } else {
         metadata[key] = value;
       }
@@ -145,9 +148,14 @@ async function createClip(mediaItems: MediaItem[], outputPath: string, jobId: st
         filters.push(filterString);
       } else if (item.type === 'video') {
         command = command.input(item.path);
-        const duration = isFinite(parseFloat(item.duration)) ? parseFloat(item.duration) : 10;
-        totalDuration += duration;
-        console.log(`Video media item duration: ${duration} seconds`);
+        const duration = parseFloat(item.duration);
+        if (isNaN(duration) || duration <= 0) {
+          log('warn', `Invalid video duration: ${item.duration}, using default of 10 seconds`, { jobId });
+          totalDuration += 10;
+        } else {
+          totalDuration += duration;
+          log('info', `Video media item duration: ${duration} seconds`, { jobId });
+        }
         let filterString = `[${i}:v]scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30`;
         filterString += `,setpts=PTS-STARTPTS`;
         filterString += `,fade=t=in:st=0:d=${fadeDuration}`;

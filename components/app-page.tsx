@@ -22,6 +22,7 @@ type MediaItem = {
 type CaptureMode = 'image' | 'video' | null
 
 export function Page() {
+  // State declarations
   const [mediaItems, setMediaItems] = useState<MediaItem[]>([])
   const [isCapturing, setIsCapturing] = useState(false)
   const [captureMode, setCaptureMode] = useState<CaptureMode>(null)
@@ -32,14 +33,39 @@ export function Page() {
   const [isCameraReady, setIsCameraReady] = useState(false)
   const [textAreaValues, setTextAreaValues] = useState<string[]>(Array(5).fill(''))
   const [textAreaFocused, setTextAreaFocused] = useState<boolean[]>(Array(5).fill(false))
+  const [recordingDuration, setRecordingDuration] = useState(0)
+  const [recordingStartTime, setRecordingStartTime] = useState<number | null>(null)
 
+  // Ref declarations
   const videoRef = useRef<HTMLVideoElement>(null)
   const captureVideoRef = useRef<HTMLVideoElement>(null)
   const streamRef = useRef<MediaStream | null>(null)
   const mediaRecorderRef = useRef<MediaRecorder | null>(null)
   const chunksRef = useRef<Blob[]>([])
+  const timerIntervalRef = useRef<NodeJS.Timeout | null>(null)
 
-  const createVideoThumbnail = (file: File): Promise<string> => {
+  // Function declarations
+  const createThumbnailFromVideo = useCallback((file: File): Promise<string> => {
+    return new Promise((resolve) => {
+      const video = document.createElement('video')
+      video.preload = 'metadata'
+      video.onloadedmetadata = () => {
+        const duration = video.duration
+        const seekTime = isFinite(duration) && duration > 0 ? duration / 2 : 1
+        video.currentTime = seekTime
+      }
+      video.onseeked = () => {
+        const canvas = document.createElement('canvas')
+        canvas.width = video.videoWidth
+        canvas.height = video.videoHeight
+        canvas.getContext('2d')?.drawImage(video, 0, 0, canvas.width, canvas.height)
+        resolve(canvas.toDataURL('image/jpeg'))
+      }
+      video.src = URL.createObjectURL(file)
+    })
+  }, [])
+
+  const createVideoThumbnail = useCallback((file: File): Promise<string> => {
     return new Promise((resolve) => {
       const video = document.createElement('video')
       video.preload = 'metadata'
@@ -55,7 +81,7 @@ export function Page() {
       }
       video.src = URL.createObjectURL(file)
     })
-  }
+  }, [])
 
   const handleFileChange = useCallback(async (event: React.ChangeEvent<HTMLInputElement>, index: number) => {
     const file = event.target.files?.[0]
@@ -147,16 +173,16 @@ export function Page() {
     
     for (let i = 0; i < mediaItems.length; i++) {
       const item = mediaItems[i];
+      if (!item || !item.file) {
+        console.error(`Invalid media item at index ${i}:`, item);
+        toast.error(`שגיאה בעיבוד פריט מדיה ${i + 1}. אנא נסה שוב או הסר את הפריט.`);
+        return; // Exit the function early if there's an invalid item
+      }
+      
       formData.append(`file${i}`, item.file);
       formData.append(`type${i}`, item.type);
       formData.append(`text${i}`, textAreaValues[i] || '');
-      
-      if (item.type === 'video') {
-        const duration = await getVideoDuration(item.file);
-        formData.append(`duration${i}`, isFinite(duration) ? duration.toString() : '10');
-      } else {
-        formData.append(`duration${i}`, isFinite(item.duration) ? item.duration.toString() : '4');
-      }
+      formData.append(`duration${i}`, item.duration.toString());
     }
     
     try {
@@ -171,6 +197,8 @@ export function Page() {
       }
 
       const data = await response.json();
+      console.log('Clip created:', data);
+
       if (data.success) {
         toast.success('הקליפ נוצר בהצלחה!');
         toast((t) => (
@@ -298,6 +326,14 @@ export function Page() {
       }
       mediaRecorderRef.current.start()
       setIsRecording(true)
+      setRecordingStartTime(Date.now())
+      setRecordingDuration(0)
+      // Start the timer
+      const timerInterval = setInterval(() => {
+        setRecordingDuration(prev => prev + 0.1)
+      }, 100)
+      // Store the interval ID in a ref so we can clear it later
+      timerIntervalRef.current = timerInterval
     } else {
       console.error('Stream ref is null')
       toast.error('Error starting recording. Please try again.')
@@ -309,6 +345,11 @@ export function Page() {
     if (mediaRecorderRef.current && isRecording) {
       mediaRecorderRef.current.stop()
       setIsRecording(false)
+      // Clear the timer
+      if (timerIntervalRef.current) {
+        clearInterval(timerIntervalRef.current)
+      }
+      // The final duration is already being updated in the state, so we don't need to set it here
     } else {
       console.error('MediaRecorder is not available or not recording')
       toast.error('Error stopping recording. Please try again.')
@@ -320,10 +361,12 @@ export function Page() {
       try {
         let preview: string
         let aspectRatio: number
+        let duration: number
 
         if (captureMode === 'video') {
           const videoFile = new File([capturedMedia], 'video.mp4', { type: 'video/mp4' })
           preview = await createThumbnailFromVideo(videoFile)
+          duration = recordingDuration // Use the recordingDuration state
           const video = document.createElement('video')
           video.src = URL.createObjectURL(videoFile)
           await new Promise<void>((resolve) => {
@@ -335,6 +378,7 @@ export function Page() {
         } else {
           preview = capturedMediaURL || ''
           aspectRatio = captureVideoRef.current ? captureVideoRef.current.videoWidth / captureVideoRef.current.videoHeight : 16 / 9
+          duration = 4 // Default duration for images
         }
 
         const file = new File([capturedMedia], `captured_${captureMode}.${captureMode === 'image' ? 'jpg' : 'mp4'}`, {
@@ -345,7 +389,7 @@ export function Page() {
           const newMediaItems = [...prevItems]
           newMediaItems[currentIndex] = {
             file,
-            duration: 4,
+            duration,
             preview,
             aspectRatio,
             type: captureMode === 'image' ? 'image' : 'video'
@@ -359,7 +403,7 @@ export function Page() {
         toast.error('Error confirming capture. Please try again.')
       }
     }
-  }, [capturedMedia, currentIndex, captureMode, capturedMediaURL, stopCapture])
+  }, [capturedMedia, currentIndex, captureMode, capturedMediaURL, stopCapture, recordingDuration, createThumbnailFromVideo])
 
   const resetCaptureState = useCallback(() => {
     setCapturedMedia(null)
@@ -406,26 +450,6 @@ export function Page() {
     }
   }, [isCapturing, capturedMediaURL])
 
-  const createThumbnailFromVideo = (file: File): Promise<string> => {
-    return new Promise((resolve) => {
-      const video = document.createElement('video')
-      video.preload = 'metadata'
-      video.onloadedmetadata = () => {
-        const duration = video.duration
-        const seekTime = isFinite(duration) && duration > 0 ? duration / 2 : 1
-        video.currentTime = seekTime
-      }
-      video.onseeked = () => {
-        const canvas = document.createElement('canvas')
-        canvas.width = video.videoWidth
-        canvas.height = video.videoHeight
-        canvas.getContext('2d')?.drawImage(video, 0, 0, canvas.width, canvas.height)
-        resolve(canvas.toDataURL('image/jpeg'))
-      }
-      video.src = URL.createObjectURL(file)
-    })
-  }
-
   const handleTextAreaChange = (index: number, value: string) => {
     const newValues = [...textAreaValues]
     newValues[index] = value
@@ -462,6 +486,25 @@ export function Page() {
       video.src = URL.createObjectURL(file);
     });
   };
+
+  const RecordingIndicator: React.FC<{ duration: number }> = ({ duration }) => {
+    const [visible, setVisible] = useState(true)
+
+    useEffect(() => {
+      const interval = setInterval(() => {
+        setVisible((prev) => !prev)
+      }, 500)
+
+      return () => clearInterval(interval)
+    }, [])
+
+    return (
+      <div className="absolute top-2 left-2 flex items-center space-x-2">
+        <div className={`w-3 h-3 rounded-full ${visible ? 'bg-red-500' : 'bg-transparent'}`} />
+        <span className="text-white text-sm font-mono">{duration.toFixed(1)}s</span>
+      </div>
+    )
+  }
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-purple-100 to-indigo-100 p-4 md:p-6 lg:p-8">
@@ -657,6 +700,7 @@ export function Page() {
                   Loading camera...
                 </div>
               )}
+              {isRecording && <RecordingIndicator duration={recordingDuration} />}
             </div>
             <div className="flex justify-between">
               {!capturedMediaURL ? (
