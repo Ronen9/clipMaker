@@ -182,7 +182,7 @@ async function createClip(mediaItems: MediaItem[], outputPath: string, jobId: st
       }
     }
 
-    filters.push(`${inputs.join('')}concat=n=${mediaItems.length}:v=1:a=0,drawtext=fontfile='${fontPath}':fontsize=24:fontcolor=white:box=1:boxcolor=black@0.5:boxborderw=5:x=(w-tw)/2:y=h-th-20:text='Created with ClipMaker'[outv]`);
+    filters.push(`${inputs.join('')}concat=n=${mediaItems.length}:v=1:a=0[outv]`);
 
     command.complexFilter(filters)
       .outputOptions('-map', '[outv]')

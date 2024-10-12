@@ -23,6 +23,13 @@ interface MediaItem {
 
 type CaptureMode = 'image' | 'video' | null
 
+type OrientationLockType = 'any' | 'natural' | 'landscape' | 'portrait' | 'portrait-primary' | 'portrait-secondary' | 'landscape-primary' | 'landscape-secondary';
+
+interface ExtendedScreenOrientation extends Omit<ScreenOrientation, 'lock' | 'unlock'> {
+  lock?: (orientation: OrientationLockType) => Promise<void>;
+  unlock?: () => void;
+}
+
 export function Page() {
   // State declarations
   const [mediaItems, setMediaItems] = useState<MediaItem[]>([])
@@ -45,6 +52,7 @@ export function Page() {
   const mediaRecorderRef = useRef<MediaRecorder | null>(null)
   const chunksRef = useRef<Blob[]>([])
   const timerIntervalRef = useRef<NodeJS.Timeout | null>(null)
+  const cleanupRef = useRef<(() => void) | null>(null)
 
   // Function declarations
   const createThumbnailFromVideo = useCallback((file: File): Promise<string> => {
@@ -240,8 +248,37 @@ export function Page() {
 
     console.log('Starting capture:', mode)
     try {
+      // Request fullscreen
+      const elem = document.documentElement;
+      if (elem.requestFullscreen) {
+        await elem.requestFullscreen();
+      } else {
+        // Fallback for browsers that don't support standard requestFullscreen
+        const anyElem = elem as any;
+        if (anyElem.mozRequestFullScreen) { // Firefox
+          await anyElem.mozRequestFullScreen();
+        } else if (anyElem.webkitRequestFullscreen) { // Chrome, Safari and Opera
+          await anyElem.webkitRequestFullscreen();
+        } else if (anyElem.msRequestFullscreen) { // IE/Edge
+          await anyElem.msRequestFullscreen();
+        }
+      }
+
+      // Force landscape orientation
+      if (screen.orientation && 'lock' in screen.orientation) {
+        try {
+          await (screen.orientation as any).lock('landscape');
+        } catch (error) {
+          console.warn('Failed to lock orientation:', error);
+        }
+      }
+
       const stream = await navigator.mediaDevices.getUserMedia({ 
-        video: { facingMode: 'environment' }, 
+        video: { 
+          facingMode: 'environment',
+          width: { ideal: 1920 },
+          height: { ideal: 1080 }
+        }, 
         audio: mode === 'video' 
       })
       console.log('Stream obtained:', stream)
@@ -250,27 +287,50 @@ export function Page() {
       setCaptureMode(mode)
       setCurrentIndex(index)
       setIsCameraReady(false) // Reset camera ready state
+
+      if (captureVideoRef.current) {
+        captureVideoRef.current.srcObject = stream
+        captureVideoRef.current.style.width = '100vw'
+        captureVideoRef.current.style.height = '100vh'
+        captureVideoRef.current.style.objectFit = 'cover'
+        await captureVideoRef.current.play()
+        setIsCameraReady(true)
+      }
+
+      // Add event listener to prevent orientation changes
+      const handleOrientationChange = async () => {
+        if (screen.orientation && 'lock' in screen.orientation) {
+          try {
+            await (screen.orientation as any).lock('landscape');
+          } catch (error) {
+            console.warn('Failed to re-lock orientation:', error);
+          }
+        }
+      };
+      window.addEventListener('orientationchange', handleOrientationChange);
+
+      // Store cleanup function
+      cleanupRef.current = () => {
+        window.removeEventListener('orientationchange', handleOrientationChange);
+        if (screen.orientation && 'unlock' in screen.orientation) {
+          (screen.orientation as any).unlock();
+        }
+        if (document.exitFullscreen) {
+          document.exitFullscreen();
+        } else {
+          const anyDocument = document as any;
+          if (anyDocument.mozCancelFullScreen) { // Firefox
+            anyDocument.mozCancelFullScreen();
+          } else if (anyDocument.webkitExitFullscreen) { // Chrome, Safari and Opera
+            anyDocument.webkitExitFullscreen();
+          } else if (anyDocument.msExitFullscreen) { // IE/Edge
+            anyDocument.msExitFullscreen();
+          }
+        }
+      };
     } catch (error) {
       console.error('Error accessing camera:', error)
-      let errorMessage = 'Unable to access camera. Please check your permissions.'
-      if (error instanceof DOMException) {
-        switch (error.name) {
-          case 'NotFoundError':
-            errorMessage = 'No camera detected. Please ensure your camera is properly connected and not in use by another application.'
-            break
-          case 'NotAllowedError':
-            errorMessage = 'Camera access was denied. Please grant camera permissions and try again.'
-            break
-          case 'NotReadableError':
-            errorMessage = 'Camera is in use by another application or encountered a hardware error. Please close other apps using the camera and try again.'
-            break
-          default:
-            errorMessage = `Camera error: ${error.message}`
-        }
-      } else if (error instanceof Error) {
-        errorMessage = `Camera error: ${error.message}`
-      }
-      toast.error(errorMessage)
+      toast.error('Error accessing camera. Please check your permissions.')
     }
   }, [])
 
@@ -283,6 +343,13 @@ export function Page() {
     if (captureVideoRef.current) {
       captureVideoRef.current.srcObject = null
     }
+    
+    // Clean up orientation lock, event listener, and exit fullscreen
+    if (cleanupRef.current) {
+      cleanupRef.current();
+      cleanupRef.current = null;
+    }
+
     setIsCapturing(false)
     setCaptureMode(null)
     setCurrentIndex(null)
@@ -315,7 +382,8 @@ export function Page() {
   const startRecording = useCallback(() => {
     console.log('Starting recording')
     if (streamRef.current) {
-      mediaRecorderRef.current = new MediaRecorder(streamRef.current)
+      mediaRecorderRef.current = new MediaRecorder(streamRef.current, { mimeType: 'video/webm;codecs=vp9' })
+      chunksRef.current = []
       mediaRecorderRef.current.ondataavailable = (event) => {
         if (event.data.size > 0) {
           chunksRef.current.push(event.data)
@@ -325,9 +393,8 @@ export function Page() {
         const blob = new Blob(chunksRef.current, { type: 'video/webm' })
         setCapturedMedia(blob)
         setCapturedMediaURL(URL.createObjectURL(blob))
-        chunksRef.current = []
       }
-      mediaRecorderRef.current.start()
+      mediaRecorderRef.current.start(1000) // Record in 1-second chunks
       setIsRecording(true)
       setRecordingStartTime(Date.now())
       setRecordingDuration(0)
@@ -335,7 +402,6 @@ export function Page() {
       const timerInterval = setInterval(() => {
         setRecordingDuration(prev => prev + 0.1)
       }, 100)
-      // Store the interval ID in a ref so we can clear it later
       timerIntervalRef.current = timerInterval
     } else {
       console.error('Stream ref is null')
@@ -667,46 +733,41 @@ export function Page() {
       <video ref={videoRef} className="hidden" />
 
       {isCapturing && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-          <div className="bg-white p-4 rounded-lg shadow-lg max-w-2xl w-full">
-            <h2 className="text-2xl font-bold mb-4">
-              {captureMode === 'image' ? 'Capture Image' : 'Record Video'}
-            </h2>
-            <div className="relative aspect-video mb-4">
-              {!capturedMediaURL && (
-                <video
-                  ref={captureVideoRef}
-                  className="w-full h-full object-cover rounded-lg"
-                  autoPlay
-                  playsInline
-                  muted
-                />
-              )}
-              {capturedMediaURL && (
-                <div className="absolute inset-0 flex items-center justify-center">
-                  {captureMode === 'image' ? (
-                    <img
-                      src={capturedMediaURL}
-                      alt="Captured"
-                      className="max-w-full max-h-full object-contain"
-                    />
-                  ) : (
-                    <video
-                      src={capturedMediaURL}
-                      className="max-w-full max-h-full object-contain"
-                      controls
-                    />
-                  )}
-                </div>
-              )}
-              {!isCameraReady && !capturedMediaURL && (
-                <div className="absolute inset-0 flex items-center justify-center bg-black bg-opacity-50 text-white">
-                  Loading camera...
-                </div>
-              )}
-              {isRecording && <RecordingIndicator duration={recordingDuration} />}
-            </div>
-            <div className="flex justify-between">
+        <div className="fixed inset-0 bg-black z-50 flex items-center justify-center">
+          <div className="w-full h-full relative">
+            {!capturedMediaURL && (
+              <video
+                ref={captureVideoRef}
+                className="absolute inset-0 w-full h-full object-cover"
+                autoPlay
+                playsInline
+                muted
+              />
+            )}
+            {capturedMediaURL && (
+              <div className="absolute inset-0 flex items-center justify-center">
+                {captureMode === 'image' ? (
+                  <img
+                    src={capturedMediaURL}
+                    alt="Captured"
+                    className="max-w-full max-h-full object-contain"
+                  />
+                ) : (
+                  <video
+                    src={capturedMediaURL}
+                    className="max-w-full max-h-full object-contain"
+                    controls
+                  />
+                )}
+              </div>
+            )}
+            {!isCameraReady && !capturedMediaURL && (
+              <div className="absolute inset-0 flex items-center justify-center bg-black bg-opacity-50 text-white">
+                Loading camera...
+              </div>
+            )}
+            {isRecording && <RecordingIndicator duration={recordingDuration} />}
+            <div className="absolute bottom-4 left-4 right-4 flex justify-between">
               {!capturedMediaURL ? (
                 <>
                   <Button onClick={stopCapture} className="bg-red-500 hover:bg-red-600 text-white">
