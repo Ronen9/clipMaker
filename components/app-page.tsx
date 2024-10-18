@@ -6,7 +6,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Slider } from "@/components/ui/slider"
 import { toast, Toaster } from 'react-hot-toast'
-import { Upload, Camera, X, Film, Image as ImageIcon, Check, RotateCcw, Play, Send } from 'lucide-react'
+import { Upload, X, Film, Image as ImageIcon, Send } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Textarea } from "@/components/ui/textarea"
 import { cn } from "@/lib/utils"
@@ -33,26 +33,11 @@ interface ExtendedScreenOrientation extends Omit<ScreenOrientation, 'lock' | 'un
 export function Page() {
   // State declarations
   const [mediaItems, setMediaItems] = useState<MediaItem[]>([])
-  const [isCapturing, setIsCapturing] = useState(false)
-  const [captureMode, setCaptureMode] = useState<CaptureMode>(null)
-  const [currentIndex, setCurrentIndex] = useState<number | null>(null)
-  const [isRecording, setIsRecording] = useState(false)
-  const [capturedMedia, setCapturedMedia] = useState<Blob | null>(null)
-  const [capturedMediaURL, setCapturedMediaURL] = useState<string | null>(null)
-  const [isCameraReady, setIsCameraReady] = useState(false)
   const [textAreaValues, setTextAreaValues] = useState<string[]>(Array(5).fill(''))
   const [textAreaFocused, setTextAreaFocused] = useState<boolean[]>(Array(5).fill(false))
-  const [recordingDuration, setRecordingDuration] = useState(0)
-  const [recordingStartTime, setRecordingStartTime] = useState<number | null>(null)
 
   // Ref declarations
   const videoRef = useRef<HTMLVideoElement>(null)
-  const captureVideoRef = useRef<HTMLVideoElement>(null)
-  const streamRef = useRef<MediaStream | null>(null)
-  const mediaRecorderRef = useRef<MediaRecorder | null>(null)
-  const chunksRef = useRef<Blob[]>([])
-  const timerIntervalRef = useRef<NodeJS.Timeout | null>(null)
-  const cleanupRef = useRef<(() => void) | null>(null)
 
   // Function declarations
   const createThumbnailFromVideo = useCallback((file: File): Promise<string> => {
@@ -181,19 +166,22 @@ export function Page() {
 
   const handleSubmit = async () => {
     const formData = new FormData();
+    let mediaCount = 0;
     
     for (let i = 0; i < mediaItems.length; i++) {
       const item = mediaItems[i];
-      if (!item || !item.file) {
-        console.error(`Invalid media item at index ${i}:`, item);
-        toast.error(`שגיאה בעיבוד פריט מדיה ${i + 1}. אנא נסה שוב או הסר את הפריט.`);
-        return; // Exit the function early if there's an invalid item
+      if (item && item.file) {
+        formData.append(`file${mediaCount}`, item.file);
+        formData.append(`type${mediaCount}`, item.type);
+        formData.append(`text${mediaCount}`, textAreaValues[i] || '');
+        formData.append(`duration${mediaCount}`, item.duration.toString());
+        mediaCount++;
       }
-      
-      formData.append(`file${i}`, item.file);
-      formData.append(`type${i}`, item.type);
-      formData.append(`text${i}`, textAreaValues[i] || '');
-      formData.append(`duration${i}`, item.duration.toString());
+    }
+    
+    if (mediaCount === 0) {
+      toast.error('אנא הוסף לפחות פריט מדיה אחד לפני השליחה.');
+      return;
     }
     
     try {
@@ -204,7 +192,7 @@ export function Page() {
 
       if (!response.ok) {
         const errorText = await response.text();
-        throw new Error(`Failed to create clip: ${response.status} ${response.statusText}. ${errorText}`);
+        throw new Error(`כשל ביצירת הקליפ: ${response.status} ${response.statusText}. ${errorText}`);
       }
 
       const data = await response.json();
@@ -222,303 +210,14 @@ export function Page() {
         setMediaItems([]);
         setTextAreaValues(Array(5).fill(''));
         setTextAreaFocused(Array(5).fill(false));
-        resetCaptureState();
-        stopCapture();
-        setCaptureMode(null);
-        setCurrentIndex(null);
       } else {
-        throw new Error(data.error || 'Unknown error occurred');
+        throw new Error(data.error || 'אירעה שגיאה לא ידועה');
       }
     } catch (error) {
-      console.error('Error creating clip:', error instanceof Error ? error.message : String(error));
+      console.error('שגיאה ביצירת הקליפ:', error instanceof Error ? error.message : String(error));
       toast.error('שגיאה ביצירת הקליפ. אנא נסה שוב.');
     }
   };
-
-  const checkMediaDevicesSupport = () => {
-    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-      toast.error('Your browser does not support media devices. Please try a different browser.')
-      return false
-    }
-    return true
-  }
-
-  const startCapture = useCallback(async (index: number, mode: CaptureMode) => {
-    if (!checkMediaDevicesSupport()) return
-
-    console.log('Starting capture:', mode)
-    try {
-      // Request fullscreen
-      const elem = document.documentElement;
-      if (elem.requestFullscreen) {
-        await elem.requestFullscreen();
-      } else {
-        // Fallback for browsers that don't support standard requestFullscreen
-        const anyElem = elem as any;
-        if (anyElem.mozRequestFullScreen) { // Firefox
-          await anyElem.mozRequestFullScreen();
-        } else if (anyElem.webkitRequestFullscreen) { // Chrome, Safari and Opera
-          await anyElem.webkitRequestFullscreen();
-        } else if (anyElem.msRequestFullscreen) { // IE/Edge
-          await anyElem.msRequestFullscreen();
-        }
-      }
-
-      // Force landscape orientation
-      if (screen.orientation && 'lock' in screen.orientation) {
-        try {
-          await (screen.orientation as any).lock('landscape');
-        } catch (error) {
-          console.warn('Failed to lock orientation:', error);
-        }
-      }
-
-      const stream = await navigator.mediaDevices.getUserMedia({ 
-        video: { 
-          facingMode: 'environment',
-          width: { ideal: 1920 },
-          height: { ideal: 1080 }
-        }, 
-        audio: mode === 'video' 
-      })
-      console.log('Stream obtained:', stream)
-      streamRef.current = stream
-      setIsCapturing(true)
-      setCaptureMode(mode)
-      setCurrentIndex(index)
-      setIsCameraReady(false) // Reset camera ready state
-
-      if (captureVideoRef.current) {
-        captureVideoRef.current.srcObject = stream
-        captureVideoRef.current.style.width = '100vw'
-        captureVideoRef.current.style.height = '100vh'
-        captureVideoRef.current.style.objectFit = 'cover'
-        await captureVideoRef.current.play()
-        setIsCameraReady(true)
-      }
-
-      // Add event listener to prevent orientation changes
-      const handleOrientationChange = async () => {
-        if (screen.orientation && 'lock' in screen.orientation) {
-          try {
-            await (screen.orientation as any).lock('landscape');
-          } catch (error) {
-            console.warn('Failed to re-lock orientation:', error);
-          }
-        }
-      };
-      window.addEventListener('orientationchange', handleOrientationChange);
-
-      // Store cleanup function
-      cleanupRef.current = () => {
-        window.removeEventListener('orientationchange', handleOrientationChange);
-        if (screen.orientation && 'unlock' in screen.orientation) {
-          (screen.orientation as any).unlock();
-        }
-        if (document.exitFullscreen) {
-          document.exitFullscreen();
-        } else {
-          const anyDocument = document as any;
-          if (anyDocument.mozCancelFullScreen) { // Firefox
-            anyDocument.mozCancelFullScreen();
-          } else if (anyDocument.webkitExitFullscreen) { // Chrome, Safari and Opera
-            anyDocument.webkitExitFullscreen();
-          } else if (anyDocument.msExitFullscreen) { // IE/Edge
-            anyDocument.msExitFullscreen();
-          }
-        }
-      };
-    } catch (error) {
-      console.error('Error accessing camera:', error)
-      toast.error('Error accessing camera. Please check your permissions.')
-    }
-  }, [])
-
-  const stopCapture = useCallback(() => {
-    console.log('Stopping capture')
-    if (streamRef.current) {
-      streamRef.current.getTracks().forEach(track => track.stop())
-      streamRef.current = null
-    }
-    if (captureVideoRef.current) {
-      captureVideoRef.current.srcObject = null
-    }
-    
-    // Clean up orientation lock, event listener, and exit fullscreen
-    if (cleanupRef.current) {
-      cleanupRef.current();
-      cleanupRef.current = null;
-    }
-
-    setIsCapturing(false)
-    setCaptureMode(null)
-    setCurrentIndex(null)
-    setCapturedMedia(null)
-    setCapturedMediaURL(null)
-    setIsRecording(false)
-    setIsCameraReady(false)
-  }, [])
-
-  const captureImage = useCallback(() => {
-    console.log('Capturing image')
-    if (captureVideoRef.current) {
-      const canvas = document.createElement('canvas')
-      canvas.width = captureVideoRef.current.videoWidth
-      canvas.height = captureVideoRef.current.videoHeight
-      canvas.getContext('2d')?.drawImage(captureVideoRef.current, 0, 0, canvas.width, canvas.height)
-      canvas.toBlob((blob) => {
-        if (blob) {
-          setCapturedMedia(blob)
-          setCapturedMediaURL(URL.createObjectURL(blob))
-        }
-      }, 'image/jpeg')
-      console.log('Image captured')
-    } else {
-      console.error('Capture video ref is null')
-      toast.error('Error capturing image. Please try again.')
-    }
-  }, [])
-
-  const startRecording = useCallback(() => {
-    console.log('Starting recording')
-    if (streamRef.current) {
-      mediaRecorderRef.current = new MediaRecorder(streamRef.current, { mimeType: 'video/webm;codecs=vp9' })
-      chunksRef.current = []
-      mediaRecorderRef.current.ondataavailable = (event) => {
-        if (event.data.size > 0) {
-          chunksRef.current.push(event.data)
-        }
-      }
-      mediaRecorderRef.current.onstop = () => {
-        const blob = new Blob(chunksRef.current, { type: 'video/webm' })
-        setCapturedMedia(blob)
-        setCapturedMediaURL(URL.createObjectURL(blob))
-      }
-      mediaRecorderRef.current.start(1000) // Record in 1-second chunks
-      setIsRecording(true)
-      setRecordingStartTime(Date.now())
-      setRecordingDuration(0)
-      // Start the timer
-      const timerInterval = setInterval(() => {
-        setRecordingDuration(prev => prev + 0.1)
-      }, 100)
-      timerIntervalRef.current = timerInterval
-    } else {
-      console.error('Stream ref is null')
-      toast.error('Error starting recording. Please try again.')
-    }
-  }, [])
-
-  const stopRecording = useCallback(() => {
-    console.log('Stopping recording')
-    if (mediaRecorderRef.current && isRecording) {
-      mediaRecorderRef.current.stop()
-      setIsRecording(false)
-      // Clear the timer
-      if (timerIntervalRef.current) {
-        clearInterval(timerIntervalRef.current)
-      }
-      // The final duration is already being updated in the state, so we don't need to set it here
-    } else {
-      console.error('MediaRecorder is not available or not recording')
-      toast.error('Error stopping recording. Please try again.')
-    }
-  }, [isRecording])
-
-  const confirmCapture = useCallback(async () => {
-    if (capturedMedia && currentIndex !== null) {
-      try {
-        let preview: string
-        let aspectRatio: number
-        let duration: number
-
-        if (captureMode === 'video') {
-          const videoFile = new File([capturedMedia], 'video.mp4', { type: 'video/mp4' })
-          preview = await createThumbnailFromVideo(videoFile)
-          duration = recordingDuration // Use the recordingDuration state
-          const video = document.createElement('video')
-          video.src = URL.createObjectURL(videoFile)
-          await new Promise<void>((resolve) => {
-            video.onloadedmetadata = () => {
-              aspectRatio = video.videoWidth / video.videoHeight
-              resolve()
-            }
-          })
-        } else {
-          preview = capturedMediaURL || ''
-          aspectRatio = captureVideoRef.current ? captureVideoRef.current.videoWidth / captureVideoRef.current.videoHeight : 16 / 9
-          duration = 4 // Default duration for images
-        }
-
-        const file = new File([capturedMedia], `captured_${captureMode}.${captureMode === 'image' ? 'jpg' : 'mp4'}`, {
-          type: captureMode === 'image' ? 'image/jpeg' : 'video/mp4'
-        })
-
-        setMediaItems(prevItems => {
-          const newMediaItems = [...prevItems]
-          newMediaItems[currentIndex] = {
-            file,
-            duration,
-            preview,
-            aspectRatio,
-            type: captureMode === 'image' ? 'image' : 'video',
-            text: textAreaValues[currentIndex] || ''
-          }
-          return newMediaItems
-        })
-
-        stopCapture()
-      } catch (error) {
-        console.error('Error confirming capture:', error instanceof Error ? error.message : String(error))
-        toast.error('Error confirming capture. Please try again.')
-      }
-    }
-  }, [capturedMedia, currentIndex, captureMode, capturedMediaURL, stopCapture, recordingDuration, createThumbnailFromVideo, textAreaValues])
-
-  const resetCaptureState = useCallback(() => {
-    setCapturedMedia(null)
-    setCapturedMediaURL(null)
-    setIsCameraReady(false)
-    setIsCapturing(false)
-    setIsRecording(false)
-  }, [])
-
-  const playVideoInThumbnail = (index: number) => {
-    const videoElement = document.createElement('video')
-    videoElement.src = URL.createObjectURL(mediaItems[index].file)
-    videoElement.className = 'max-w-full max-h-full object-contain'
-    videoElement.controls = true
-    videoElement.autoplay = true
-
-    const thumbnailContainer = document.getElementById(`thumbnail-${index}`)
-    if (thumbnailContainer) {
-      thumbnailContainer.innerHTML = ''
-      thumbnailContainer.appendChild(videoElement)
-    }
-  }
-
-  useEffect(() => {
-    return () => {
-      stopCapture()
-    }
-  }, [stopCapture])
-
-  useEffect(() => {
-    if (isCapturing && captureVideoRef.current && streamRef.current) {
-      captureVideoRef.current.srcObject = streamRef.current
-      captureVideoRef.current.onloadedmetadata = () => {
-        captureVideoRef.current?.play()
-          .then(() => {
-            console.log('Video playback started')
-            setIsCameraReady(true)
-          })
-          .catch((playError) => {
-            console.error('Error playing video:', playError)
-            toast.error('Error starting camera. Please try again.')
-          })
-      }
-    }
-  }, [isCapturing, capturedMediaURL])
 
   const handleTextAreaChange = (index: number, value: string) => {
     const newValues = [...textAreaValues]
@@ -556,25 +255,6 @@ export function Page() {
       video.src = URL.createObjectURL(file);
     });
   };
-
-  const RecordingIndicator: React.FC<{ duration: number }> = ({ duration }) => {
-    const [visible, setVisible] = useState(true)
-
-    useEffect(() => {
-      const interval = setInterval(() => {
-        setVisible((prev) => !prev)
-      }, 500)
-
-      return () => clearInterval(interval)
-    }, [])
-
-    return (
-      <div className="absolute top-2 left-2 flex items-center space-x-2">
-        <div className={`w-3 h-3 rounded-full ${visible ? 'bg-red-500' : 'bg-transparent'}`} />
-        <span className="text-white text-sm font-mono">{duration.toFixed(1)}s</span>
-      </div>
-    )
-  }
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-purple-100 to-indigo-100 p-4 md:p-6 lg:p-8">
@@ -639,16 +319,6 @@ export function Page() {
                               <Film className="w-5 h-5 text-indigo-500" />
                             )}
                           </div>
-                          {mediaItems[index].type === 'video' && (
-                            <div 
-                              className="absolute inset-0 flex items-center justify-center cursor-pointer"
-                              onClick={() => playVideoInThumbnail(index)}
-                            >
-                              <div className="bg-black bg-opacity-50 rounded-full p-3">
-                                <Play className="w-10 h-10 text-white" />
-                              </div>
-                            </div>
-                          )}
                         </div>
                       ) : (
                         <div className="flex flex-col space-y-3">
@@ -661,22 +331,6 @@ export function Page() {
                               <span className="font-medium text-indigo-500 text-lg">Upload</span>
                             </span>
                           </Label>
-                          <div className="flex space-x-2">
-                            <Button
-                              onClick={() => startCapture(index, 'image')}
-                              className="flex-1 bg-indigo-100 text-indigo-600 hover:bg-indigo-200 py-3"
-                            >
-                              <Camera className="w-5 h-5 mr-2" />
-                              Capture Image
-                            </Button>
-                            <Button
-                              onClick={() => startCapture(index, 'video')}
-                              className="flex-1 bg-indigo-100 text-indigo-600 hover:bg-indigo-200 py-3"
-                            >
-                              <Film className="w-5 h-5 mr-2" />
-                              Record Video
-                            </Button>
-                          </div>
                         </div>
                       )}
                     </div>
@@ -731,78 +385,6 @@ export function Page() {
         </div>
       </motion.div>
       <video ref={videoRef} className="hidden" />
-
-      {isCapturing && (
-        <div className="fixed inset-0 bg-black z-50 flex items-center justify-center">
-          <div className="w-full h-full relative">
-            {!capturedMediaURL && (
-              <video
-                ref={captureVideoRef}
-                className="absolute inset-0 w-full h-full object-cover"
-                autoPlay
-                playsInline
-                muted
-              />
-            )}
-            {capturedMediaURL && (
-              <div className="absolute inset-0 flex items-center justify-center">
-                {captureMode === 'image' ? (
-                  <img
-                    src={capturedMediaURL}
-                    alt="Captured"
-                    className="max-w-full max-h-full object-contain"
-                  />
-                ) : (
-                  <video
-                    src={capturedMediaURL}
-                    className="max-w-full max-h-full object-contain"
-                    controls
-                  />
-                )}
-              </div>
-            )}
-            {!isCameraReady && !capturedMediaURL && (
-              <div className="absolute inset-0 flex items-center justify-center bg-black bg-opacity-50 text-white">
-                Loading camera...
-              </div>
-            )}
-            {isRecording && <RecordingIndicator duration={recordingDuration} />}
-            <div className="absolute bottom-4 left-4 right-4 flex justify-between">
-              {!capturedMediaURL ? (
-                <>
-                  <Button onClick={stopCapture} className="bg-red-500 hover:bg-red-600 text-white">
-                    Cancel
-                  </Button>
-                  {captureMode === 'image' ? (
-                    <Button onClick={captureImage} className="bg-green-500 hover:bg-green-600 text-white" disabled={!isCameraReady}>
-                      Capture
-                    </Button>
-                  ) : (
-                    <Button
-                      onClick={isRecording ? stopRecording : startRecording}
-                      className={`${isRecording ? 'bg-red-500 hover:bg-red-600' : 'bg-green-500 hover:bg-green-600'} text-white`}
-                      disabled={!isCameraReady}
-                    >
-                      {isRecording ? 'Stop Recording' : 'Start Recording'}
-                    </Button>
-                  )}
-                </>
-              ) : (
-                <>
-                  <Button onClick={() => { resetCaptureState() }} className="bg-yellow-500 hover:bg-yellow-600 text-white">
-                    <RotateCcw className="w-4 h-4 mr-2" />
-                    Retake
-                  </Button>
-                  <Button onClick={confirmCapture} className="bg-green-500 hover:bg-green-600 text-white">
-                    <Check className="w-4 h-4 mr-2" />
-                    Confirm
-                  </Button>
-                </>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   )
 }
