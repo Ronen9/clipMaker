@@ -6,7 +6,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Slider } from "@/components/ui/slider"
 import { toast, Toaster } from 'react-hot-toast'
-import { Upload, X, Film, Image as ImageIcon, Send } from 'lucide-react'
+import { Upload, X, Film, Image as ImageIcon, Send, Play } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Textarea } from "@/components/ui/textarea"
 import { cn } from "@/lib/utils"
@@ -30,11 +30,30 @@ interface ExtendedScreenOrientation extends Omit<ScreenOrientation, 'lock' | 'un
   unlock?: () => void;
 }
 
+// Add this near the top of the file, after the imports
+const LoadingOverlay = ({ progress }: { progress: number }) => (
+  <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+    <div className="bg-white rounded-lg p-8 flex flex-col items-center w-80">
+      <svg className="animate-spin h-12 w-12 text-indigo-600 mb-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+      </svg>
+      <p className="text-indigo-700 font-semibold mb-2">מעבד את הקליפ...</p>
+      <div className="w-full bg-gray-200 rounded-full h-2.5 dark:bg-gray-700 mb-2">
+        <div className="bg-indigo-600 h-2.5 rounded-full" style={{ width: `${progress}%` }}></div>
+      </div>
+    </div>
+  </div>
+);
+
 export function Page() {
   // State declarations
   const [mediaItems, setMediaItems] = useState<MediaItem[]>([])
   const [textAreaValues, setTextAreaValues] = useState<string[]>(Array(5).fill(''))
   const [textAreaFocused, setTextAreaFocused] = useState<boolean[]>(Array(5).fill(false))
+  const [isLoading, setIsLoading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState(0);
+  const [playingVideoIndex, setPlayingVideoIndex] = useState<number | null>(null);
 
   // Ref declarations
   const videoRef = useRef<HTMLVideoElement>(null)
@@ -165,6 +184,8 @@ export function Page() {
   }, [mediaItems])
 
   const handleSubmit = async () => {
+    stopAllVideos(); // Stop all playing videos
+
     const formData = new FormData();
     let mediaCount = 0;
     
@@ -184,11 +205,27 @@ export function Page() {
       return;
     }
     
+    setIsLoading(true);
+    setUploadProgress(0);
+
     try {
+      // Simulated progress updates
+      const progressInterval = setInterval(() => {
+        setUploadProgress((prevProgress) => {
+          if (prevProgress >= 99) {
+            clearInterval(progressInterval);
+            return 99;
+          }
+          return prevProgress + 1;
+        });
+      }, 500); // Update every 500ms
+
       const response = await fetch('/api/create-clip', {
         method: 'POST',
         body: formData,
       });
+
+      clearInterval(progressInterval);
 
       if (!response.ok) {
         const errorText = await response.text();
@@ -216,6 +253,9 @@ export function Page() {
     } catch (error) {
       console.error('שגיאה ביצירת הקליפ:', error instanceof Error ? error.message : String(error));
       toast.error('שגיאה ביצירת הקליפ. אנא נסה שוב.');
+    } finally {
+      setIsLoading(false);
+      setUploadProgress(0);
     }
   };
 
@@ -256,9 +296,22 @@ export function Page() {
     });
   };
 
+  const calculateTotalSize = (mediaItems: MediaItem[]): number => {
+    return mediaItems.reduce((total, item) => total + (item.file?.size || 0), 0);
+  };
+
+  const playVideoInThumbnail = useCallback((index: number) => {
+    setPlayingVideoIndex(prevIndex => prevIndex === index ? null : index);
+  }, []);
+
+  const stopAllVideos = useCallback(() => {
+    setPlayingVideoIndex(null);
+  }, []);
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-purple-100 to-indigo-100 p-4 md:p-6 lg:p-8">
       <Toaster position="top-center" />
+      {isLoading && <LoadingOverlay progress={uploadProgress} />}
       <motion.div 
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
@@ -307,18 +360,40 @@ export function Page() {
                       />
                       {mediaItems[index] ? (
                         <div id={`thumbnail-${index}`} className="relative w-full h-60 md:h-80 flex items-center justify-center border-2 border-indigo-300 rounded-lg overflow-hidden">
-                          <img
-                            src={mediaItems[index].preview}
-                            alt={`Preview of media ${index + 1}`}
-                            className="max-w-full max-h-full object-contain"
-                          />
-                          <div className="absolute top-2 right-2 bg-white rounded-full p-2">
-                            {mediaItems[index].type === 'image' ? (
-                              <ImageIcon className="w-5 h-5 text-indigo-500" />
-                            ) : (
-                              <Film className="w-5 h-5 text-indigo-500" />
-                            )}
-                          </div>
+                          {playingVideoIndex === index && mediaItems[index].type === 'video' ? (
+                            <video
+                              src={URL.createObjectURL(mediaItems[index].file)}
+                              className="max-w-full max-h-full object-contain"
+                              controls
+                              autoPlay
+                              onEnded={() => setPlayingVideoIndex(null)}
+                            />
+                          ) : (
+                            <>
+                              <img
+                                src={mediaItems[index].preview}
+                                alt={`Preview of media ${index + 1}`}
+                                className="max-w-full max-h-full object-contain"
+                              />
+                              <div className="absolute top-2 right-2 bg-white rounded-full p-2">
+                                {mediaItems[index].type === 'image' ? (
+                                  <ImageIcon className="w-5 h-5 text-indigo-500" />
+                                ) : (
+                                  <Film className="w-5 h-5 text-indigo-500" />
+                                )}
+                              </div>
+                              {mediaItems[index].type === 'video' && (
+                                <div 
+                                  className="absolute inset-0 flex items-center justify-center cursor-pointer"
+                                  onClick={() => playVideoInThumbnail(index)}
+                                >
+                                  <div className="bg-black bg-opacity-50 rounded-full p-3">
+                                    <Play className="w-10 h-10 text-white" />
+                                  </div>
+                                </div>
+                              )}
+                            </>
+                          )}
                         </div>
                       ) : (
                         <div className="flex flex-col space-y-3">
@@ -377,10 +452,22 @@ export function Page() {
           <Button
             className="w-full mt-8 bg-indigo-600 hover:bg-indigo-700 text-white transition-colors text-right font-bold text-lg py-4 rounded-lg shadow-md flex items-center justify-center"
             onClick={handleSubmit}
-            disabled={mediaItems.length === 0}
+            disabled={mediaItems.length === 0 || isLoading}
           >
-            <Send className="w-6 h-6 ml-2" />
-            שגר\י ליצירת הקליפ
+            {isLoading ? (
+              <>
+                <svg className="animate-spin -ml-1 mr-3 h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                </svg>
+                מעבד...
+              </>
+            ) : (
+              <>
+                <Send className="w-6 h-6 ml-2" />
+                שגר\י ליצירת הקליפ
+              </>
+            )}
           </Button>
         </div>
       </motion.div>
