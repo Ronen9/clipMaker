@@ -197,7 +197,7 @@ async function createClip(mediaItems: MediaItem[], outputPath: string, jobId: st
         command = command.input(item.path).loop();
         const duration = parseFloat(item.duration) || 4; // Default to 4 seconds if invalid
         totalDuration += duration;
-        let filterString = `[${i}:v]scale=1080:1350:force_original_aspect_ratio=increase,crop=1080:1350,setsar=1,fps=30`;
+        let filterString = `[${i}:v]scale=1080:1350:force_original_aspect_ratio=decrease,pad=1080:1350:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30`;
         filterString += `,trim=duration=${duration}`;
         const effectiveFadeDuration = Math.min(fadeDuration, duration / 2);
         filterString += `,fade=t=in:st=0:d=${effectiveFadeDuration},fade=t=out:st=${duration - effectiveFadeDuration}:d=${effectiveFadeDuration}`;
@@ -213,7 +213,7 @@ async function createClip(mediaItems: MediaItem[], outputPath: string, jobId: st
           totalDuration += duration;
           log('info', `Video media item duration: ${duration} seconds`, { jobId });
         }
-        let filterString = `[${i}:v]scale=1080:1350:force_original_aspect_ratio=increase,crop=1080:1350,setsar=1,fps=30`;
+        let filterString = `[${i}:v]scale=1080:1350:force_original_aspect_ratio=decrease,pad=1080:1350:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30`;
         filterString += `,setpts=PTS-STARTPTS`;
         filterString += `,fade=t=in:st=0:d=${fadeDuration}`;
         filterString += `,fade=t=out:st=${duration - fadeDuration}:d=${fadeDuration}`;
@@ -378,6 +378,7 @@ interface MediaItem {
   type: 'image' | 'video';
   text: string;
 }
+
 
 
 
