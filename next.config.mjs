@@ -21,6 +21,26 @@ const nextConfig = {
 
     return config;
   },
+  async headers() {
+    return [
+      {
+        source: '/output/:path*',
+        headers: [
+          { key: 'Access-Control-Allow-Origin', value: '*' },
+        ],
+      },
+    ]
+  },
+
+  // Add this configuration
+  async rewrites() {
+    return [
+      {
+        source: '/output/:path*',
+        destination: '/public/output/:path*',
+      },
+    ];
+  },
 };
 
 export default nextConfig;

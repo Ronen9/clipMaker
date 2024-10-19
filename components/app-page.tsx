@@ -10,6 +10,7 @@ import { Upload, X, Film, Image as ImageIcon, Send, Play } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Textarea } from "@/components/ui/textarea"
 import { cn } from "@/lib/utils"
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 
 interface MediaItem {
   file: File
@@ -54,6 +55,8 @@ export function Page() {
   const [isLoading, setIsLoading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
   const [playingVideoIndex, setPlayingVideoIndex] = useState<number | null>(null);
+  const [isDialogOpen, setIsDialogOpen] = useState(false);
+  const [clipUrl, setClipUrl] = useState<string | null>(null);
 
   // Ref declarations
   const videoRef = useRef<HTMLVideoElement>(null)
@@ -97,12 +100,14 @@ export function Page() {
     })
   }, [])
 
-  const handleFileChange = useCallback(async (event: React.ChangeEvent<HTMLInputElement>, index: number) => {
-    const file = event.target.files?.[0]
-    if (file) {
-      await processFile(file, index)
-    }
-  }, [])
+  const handleFileChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    stopAllVideos(); // Stop all playing videos
+
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    await processFile(file, mediaItems.length);
+  };
 
   const processFile = async (file: File, index: number) => {
     try {
@@ -184,7 +189,20 @@ export function Page() {
   }, [mediaItems])
 
   const handleSubmit = async () => {
-    stopAllVideos(); // Stop all playing videos
+    stopAllVideos();
+
+    if (mediaItems.length === 0) {
+      toast.error('אנא הוסף לפחות פריט מדיה אחד לפני השליחה.');
+      return;
+    }
+
+    setIsDialogOpen(true);
+  };
+
+  const handleConfirmDownload = async () => {
+    setIsDialogOpen(false);
+    setIsLoading(true);
+    setUploadProgress(0);
 
     const formData = new FormData();
     let mediaCount = 0;
@@ -199,14 +217,6 @@ export function Page() {
         mediaCount++;
       }
     }
-    
-    if (mediaCount === 0) {
-      toast.error('אנא הוסף לפחות פריט מדיה אחד לפני השליחה.');
-      return;
-    }
-    
-    setIsLoading(true);
-    setUploadProgress(0);
 
     try {
       // Simulated progress updates
@@ -218,7 +228,7 @@ export function Page() {
           }
           return prevProgress + 1;
         });
-      }, 500); // Update every 500ms
+      }, 500);
 
       const response = await fetch('/api/create-clip', {
         method: 'POST',
@@ -243,6 +253,9 @@ export function Page() {
           </span>
         ), { duration: 5000 });
 
+        // Start polling for the clip URL
+        pollForClipUrl(data.jobId);
+
         // Reset all state
         setMediaItems([]);
         setTextAreaValues(Array(5).fill(''));
@@ -258,6 +271,69 @@ export function Page() {
       setUploadProgress(0);
     }
   };
+
+  const pollForClipUrl = async (jobId: string) => {
+    const pollInterval = setInterval(async () => {
+      try {
+        const response = await fetch(`/api/create-clip?jobId=${jobId}`);
+        if (!response.ok) {
+          if (response.status === 404) {
+            // Job not found, stop polling
+            clearInterval(pollInterval);
+            toast.error('הקליפ לא נמצא. אנא נסה שוב.');
+            return;
+          }
+          throw new Error(`HTTP error! status: ${response.status}`);
+        }
+        
+        const contentType = response.headers.get('content-type');
+        if (contentType && contentType.includes('application/json')) {
+          // Still processing
+          const data = await response.json();
+          console.log('Clip status:', data);
+          if (data.status === 'failed') {
+            clearInterval(pollInterval);
+            toast.error('שגיאה ביצירת הקליפ. אנא נסה שוב.');
+          }
+        } else {
+          // Clip is ready, start download
+          clearInterval(pollInterval);
+          const blob = await response.blob();
+          const url = window.URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.style.display = 'none';
+          a.href = url;
+          a.download = response.headers.get('content-disposition')?.split('filename=')[1].replace(/"/g, '') || 'clip.mp4';
+          document.body.appendChild(a);
+          a.click();
+          window.URL.revokeObjectURL(url);
+          toast.success('הקליפ הורד בהצלחה!');
+        }
+      } catch (error) {
+        console.error('שגיאה בבדיקת סטטוס הקליפ:', error instanceof Error ? error.message : String(error));
+        clearInterval(pollInterval);
+        toast.error('שגיאה בבדיקת סטטוס הקליפ. אנא נסה שוב.');
+      }
+    }, 5000); // Poll every 5 seconds
+  };
+
+  useEffect(() => {
+    if (clipUrl) {
+      // Prepend the base URL if it's not already an absolute URL
+      const fullUrl = clipUrl.startsWith('http') ? clipUrl : `${window.location.origin}${clipUrl}`;
+      
+      // Trigger download when clipUrl is available
+      const link = document.createElement('a');
+      link.href = fullUrl;
+      link.download = `clip_${Date.now()}.mp4`; // Use a timestamp for a unique filename
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+
+      // Clear the clipUrl after download
+      setClipUrl(null);
+    }
+  }, [clipUrl]);
 
   const handleTextAreaChange = (index: number, value: string) => {
     const newValues = [...textAreaValues]
@@ -356,7 +432,7 @@ export function Page() {
                         type="file"
                         accept="image/*,video/*"
                         className="hidden"
-                        onChange={(e) => handleFileChange(e, index)}
+                        onChange={(e) => handleFileChange(e)}
                       />
                       {mediaItems[index] ? (
                         <div id={`thumbnail-${index}`} className="relative w-full h-60 md:h-80 flex items-center justify-center border-2 border-indigo-300 rounded-lg overflow-hidden">
@@ -472,6 +548,18 @@ export function Page() {
         </div>
       </motion.div>
       <video ref={videoRef} className="hidden" />
+
+      <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>האם אתה בטוח שברצונך ליצור את הקליפ?</DialogTitle>
+          </DialogHeader>
+          <DialogFooter>
+            <Button onClick={() => setIsDialogOpen(false)} variant="outline">ביטול</Button>
+            <Button onClick={handleConfirmDownload}>אישור והורדה למכשיר</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

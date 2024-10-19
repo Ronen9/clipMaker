@@ -8,6 +8,7 @@ import ffmpegStatic from 'ffmpeg-static';
 import { v4 as uuidv4 } from 'uuid';
 import { Queue, Worker, Job } from 'bullmq';
 import Redis, { RedisOptions } from 'ioredis';
+import os from 'os';
 
 // Add a simple logging function
 function log(level: 'info' | 'warn' | 'error' | 'debug', message: string, meta?: any) {
@@ -114,6 +115,54 @@ export async function POST(req: NextRequest) {
   }
 }
 
+export async function GET(req: NextRequest) {
+  const { searchParams } = new URL(req.url);
+  const jobId = searchParams.get('jobId');
+
+  if (!jobId) {
+    return NextResponse.json({ error: 'Job ID is required' }, { status: 400 });
+  }
+
+  try {
+    const job = await clipQueue.getJob(jobId);
+    if (!job) {
+      return NextResponse.json({ error: 'Job not found' }, { status: 404 });
+    }
+
+    const state = await job.getState();
+    console.log(`Job ${jobId} state:`, state);
+
+    if (state === 'completed') {
+      const result = job.returnvalue;
+      console.log(`Job ${jobId} result:`, result);
+      if (result && result.success && result.clipPath) {
+        const fileStream = fs.createReadStream(result.clipPath);
+        const response = new NextResponse(fileStream as any);
+
+        response.headers.set('Content-Type', 'video/mp4');
+        response.headers.set('Content-Disposition', `attachment; filename="${result.fileName}"`);
+
+        // Delete the file after streaming
+        fileStream.on('close', () => {
+          fs.unlink(result.clipPath, (err) => {
+            if (err) console.error(`Error deleting temporary file: ${err}`);
+          });
+        });
+
+        return response;
+      } else {
+        return NextResponse.json({ status: 'failed', error: 'Clip creation failed' });
+      }
+    } else if (state === 'failed') {
+      return NextResponse.json({ status: 'failed', error: 'Clip creation failed' });
+    } else {
+      return NextResponse.json({ status: 'processing' });
+    }
+  } catch (error) {
+    console.error('Error checking job status:', error instanceof Error ? error.message : String(error));
+    return NextResponse.json({ error: 'Error checking job status' }, { status: 500 });
+  }
+}
 async function createClip(mediaItems: MediaItem[], outputPath: string, jobId: string) {
   try {
     log('info', `Starting clip creation`, { jobId, mediaItemCount: mediaItems.length, outputPath });
@@ -248,64 +297,24 @@ async function createClip(mediaItems: MediaItem[], outputPath: string, jobId: st
 }
 
 // Add this function to handle the job processing
-async function processClipJob(job: Job<{ mediaItems: MediaItem[], outputPath: string, sessionId: string }, any, string>) {
-  const { mediaItems, outputPath, sessionId } = job.data;
+async function processClipJob(job: Job<{ mediaItems: MediaItem[], sessionId: string }, any, string>) {
+  const { mediaItems, sessionId } = job.data;
   const jobId = job.id || 'unknown';
   
   try {
     log('info', `Processing clip job`, { jobId, sessionId });
-    const totalDuration = mediaItems.reduce((total: number, item) => total + parseFloat(item.duration), 0);
+    
+    // Generate a unique filename for the temporary output
+    const tempFileName = `${uuidv4()}.mp4`;
+    const outputPath = path.join(os.tmpdir(), tempFileName);
+    
     await createClip(mediaItems, outputPath, jobId);
     
     if (await fs.pathExists(outputPath)) {
-      const fileStats = await fs.stat(outputPath);
-      const fileSize = fileStats.size;
-      const dateCreated = new Date().toISOString();
-
-      if (WEBHOOK_URL) {
-        try {
-          log('info', `Sending clip to webhook`, { jobId, sessionId });
-          const response = await fetch(WEBHOOK_URL, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              clipUrl: outputPath,
-              sessionId,
-              fileSize,
-              duration: totalDuration,
-              dateCreated,
-              mediaItemCount: mediaItems.length
-            }),
-          });
-
-          if (!response.ok) {
-            throw new Error(`Failed to send clip to webhook: ${response.status} ${response.statusText}`);
-          }
-          log('info', `Clip sent to webhook successfully`, { jobId, sessionId });
-        } catch (error) {
-          log('error', `Error sending clip to webhook`, { 
-            jobId, 
-            sessionId, 
-            error: error instanceof Error ? error.message : String(error)
-          });
-        }
-      } else {
-        log('warn', `Webhook URL not set, skipping webhook call`, { jobId, sessionId });
-      }
-
-      // Schedule output file cleanup
-      setTimeout(async () => {
-        try {
-          await fs.remove(outputPath);
-          log('info', `Cleaned up output file`, { jobId, sessionId, outputPath });
-        } catch (error) {
-          log('error', `Error cleaning up output file`, { jobId, sessionId, outputPath, error });
-        }
-      }, 5 * 60 * 1000); // 5 minutes
-
       log('info', `Clip job processed successfully`, { jobId, sessionId });
       console.log('\n\x1b[32m%s\x1b[0m', `Clip creation completed! Output file: ${outputPath}`);
-      return { success: true, clipUrl: outputPath };
+      
+      return { success: true, clipPath: outputPath, fileName: tempFileName };
     } else {
       throw new Error('Output file was not created');
     }
@@ -316,11 +325,7 @@ async function processClipJob(job: Job<{ mediaItems: MediaItem[], outputPath: st
       error: error instanceof Error ? error.message : String(error),
       stack: error instanceof Error ? error.stack : undefined
     });
-    // Instead of re-throwing, we'll return an error object
     return { success: false, error: error instanceof Error ? error.message : String(error) };
-  } finally {
-    // Clean up temporary files
-    await cleanupTempFiles(mediaItems);
   }
 }
 
@@ -372,3 +377,6 @@ interface MediaItem {
   type: 'image' | 'video';
   text: string;
 }
+
+
+
