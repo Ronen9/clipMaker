@@ -141,20 +141,37 @@ export function Page() {
         URL.revokeObjectURL(blobUrl)  // Revoke the blob URL after we're done with it
       } else if (file.type.startsWith('image/')) {
         type = 'image'
-        const img = new Image()
-        const blobUrl = URL.createObjectURL(file)
-        img.src = blobUrl
-        await new Promise<void>((resolve) => {
-          img.onload = () => {
-            aspectRatio = img.width / img.height
-            preview = blobUrl  // Use the blob URL as the preview
-            resolve()
-          }
-        })
-        // Don't revoke the blob URL here, as we're using it for the preview
-        duration = 4
+        preview = await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = (e) => {
+            const img = new Image();
+            img.onload = () => {
+              aspectRatio = img.width / img.height;
+              const canvas = document.createElement('canvas');
+              const ctx = canvas.getContext('2d');
+              
+              // Set canvas dimensions to a reasonable thumbnail size
+              const maxSize = 300;
+              const scale = Math.min(maxSize / img.width, maxSize / img.height);
+              canvas.width = img.width * scale;
+              canvas.height = img.height * scale;
+              
+              if (ctx) {
+                ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+                resolve(canvas.toDataURL('image/jpeg', 0.8));
+              } else {
+                reject(new Error('Failed to get canvas context'));
+              }
+            };
+            img.onerror = () => reject(new Error('Failed to load image'));
+            img.src = e.target?.result as string;
+          };
+          reader.onerror = () => reject(new Error('Failed to read file'));
+          reader.readAsDataURL(file);
+        });
+        duration = 4;
       } else {
-        throw new Error('Unsupported file type')
+        throw new Error('Unsupported file type');
       }
 
       setMediaItems(prevItems => {
@@ -170,8 +187,8 @@ export function Page() {
         return newMediaItems
       })
     } catch (error) {
-      console.error('Error processing file:', error instanceof Error ? error.message : String(error))
-      toast.error('Error processing file. Please try again.')
+      console.error('Error processing file:', error);
+      toast.error('שגיאה בעיבוד הקובץ. אנא נסה שוב.');
     }
   }
 
