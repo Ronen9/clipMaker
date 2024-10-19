@@ -210,7 +210,7 @@ export function Page() {
     for (let i = 0; i < mediaItems.length; i++) {
       const item = mediaItems[i];
       if (item && item.file) {
-        formData.append(`file${mediaCount}`, item.file);
+        formData.append(`file${mediaCount}`, item.file);  // This ensures we're sending the original file
         formData.append(`type${mediaCount}`, item.type);
         formData.append(`text${mediaCount}`, textAreaValues[i] || '');
         formData.append(`duration${mediaCount}`, item.duration.toString());
@@ -270,7 +270,7 @@ export function Page() {
       setIsLoading(false);
       setUploadProgress(0);
     }
-  };
+  }
 
   const pollForClipUrl = async (jobId: string) => {
     const pollInterval = setInterval(async () => {
@@ -550,13 +550,31 @@ export function Page() {
       <video ref={videoRef} className="hidden" />
 
       <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
-        <DialogContent>
+        <DialogContent className="sm:max-w-[425px] bg-white rounded-xl shadow-lg overflow-hidden">
           <DialogHeader>
-            <DialogTitle>האם אתה בטוח שברצונך ליצור את הקליפ?</DialogTitle>
+            <DialogTitle className="text-2xl font-bold text-indigo-600 text-center">יצירת הקליפ</DialogTitle>
           </DialogHeader>
-          <DialogFooter>
-            <Button onClick={() => setIsDialogOpen(false)} variant="outline">ביטול</Button>
-            <Button onClick={handleConfirmDownload}>אישור והורדה למכשיר</Button>
+          <div className="py-4">
+            <p className="text-sm text-gray-500 text-right">
+              האם אתה בטוח שברצונך ליצור את הקליפ? לאחר האישור, הקליפ ייווצר ויורד למכשירך.
+            </p>
+          </div>
+          <DialogFooter className="sm:justify-start">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setIsDialogOpen(false)}
+              className="w-full sm:w-auto border-indigo-600 text-indigo-600 hover:bg-indigo-50"
+            >
+              ביטול
+            </Button>
+            <Button
+              type="button"
+              onClick={handleConfirmDownload}
+              className="w-full sm:w-auto bg-indigo-600 hover:bg-indigo-700 text-white"
+            >
+              אישור והורדה
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
