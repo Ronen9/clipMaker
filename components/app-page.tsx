@@ -572,8 +572,12 @@ export function Page() {
             <DialogTitle className="text-2xl font-bold text-indigo-600 text-center">יצירת הקליפ</DialogTitle>
           </DialogHeader>
           <div className="py-4">
-            <p className="text-sm text-gray-500 text-right">
+            <p className="text-sm text-gray-500 text-right mb-4">
               האם אתה בטוח שברצונך ליצור את הקליפ? לאחר האישור, הקליפ ייווצר ויורד למכשירך.
+            </p>
+            <p className="text-sm text-indigo-600 font-semibold text-right bg-indigo-50 p-3 rounded-lg">
+              שים לב: לאחר הלחיצה על אישור, אנא המתן כ-30 שניות על מסך זה.
+              הקליפ שלך מעובד ויורד אוטומטית למכשירך ברגע שיהיה מוכן! 🎥
             </p>
           </div>
           <DialogFooter className="sm:justify-start">
